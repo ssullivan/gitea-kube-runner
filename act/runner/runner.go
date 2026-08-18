@@ -16,6 +16,7 @@ import (
 
 	"gitea.com/gitea/runner/act/common"
 	"gitea.com/gitea/runner/act/container"
+	"gitea.com/gitea/runner/act/container/kubernetes"
 
 	"gitea.dev/actionslib/pkg/model"
 	docker_container "github.com/moby/moby/api/types/container"
@@ -101,9 +102,9 @@ type Config struct {
 	Kubernetes                        KubernetesConfig             // settings for the kubernetes execution backend, used by jobs whose runs-on label selects it
 }
 
-// KubernetesConfig configures the kubernetes execution backend. It carries plain
-// values rather than a live client so this package needs no kubernetes SDK of its own,
-// the way it needs no docker client either.
+// KubernetesConfig configures the kubernetes execution backend. It holds the backend's own
+// types rather than restating them: this package already depends on that one, so a third
+// copy of the same fields bought nothing but two conversions to keep in step.
 type KubernetesConfig struct {
 	Namespace              string
 	Kubeconfig             string
@@ -114,36 +115,12 @@ type KubernetesConfig struct {
 	PodLabels              map[string]string
 	PodAnnotations         map[string]string
 	NodeSelector           map[string]string
-	Tolerations            []KubernetesToleration
-	Resources              KubernetesResources
-	SecurityContext        KubernetesSecurityContext
+	Tolerations            []kubernetes.Toleration
+	Resources              kubernetes.PodResources
+	SecurityContext        kubernetes.PodSecurityContext
 	SchedulingTimeout      time.Duration
 	ServiceReadyTimeout    time.Duration // 0 falls back to the docker backend's service_ready_timeout; negative disables waiting
 	TerminationGracePeriod time.Duration
-}
-
-// KubernetesToleration is a scheduling toleration applied to every job Pod.
-type KubernetesToleration struct {
-	Key      string
-	Operator string
-	Value    string
-	Effect   string
-}
-
-// KubernetesResources are the job container's resource requests and limits, in
-// Kubernetes quantity syntax.
-type KubernetesResources struct {
-	RequestsCPU    string
-	RequestsMemory string
-	LimitsCPU      string
-	LimitsMemory   string
-}
-
-// KubernetesSecurityContext are the Pod-level securityContext defaults for job Pods.
-type KubernetesSecurityContext struct {
-	RunAsNonRoot *bool
-	RunAsUser    *int64
-	FSGroup      *int64
 }
 
 // RunnerDebug reports whether debug logging is on, exposed as `runner.debug` and

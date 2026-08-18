@@ -92,9 +92,9 @@ func (rc *RunContext) startPodEnvironment() common.Executor {
 			Labels:                 kcfg.PodLabels,
 			Annotations:            kcfg.PodAnnotations,
 			NodeSelector:           kcfg.NodeSelector,
-			Tolerations:            podTolerations(kcfg.Tolerations),
-			Resources:              kubernetes.PodResources(kcfg.Resources),
-			SecurityContext:        kubernetes.PodSecurityContext(kcfg.SecurityContext),
+			Tolerations:            kcfg.Tolerations,
+			Resources:              kcfg.Resources,
+			SecurityContext:        kcfg.SecurityContext,
 			Privileged:             rc.Config.Privileged,
 			TerminationGracePeriod: kcfg.TerminationGracePeriod,
 			SchedulingTimeout:      kcfg.SchedulingTimeout,
@@ -247,14 +247,6 @@ func serviceReadyTimeout(kcfg KubernetesConfig, fallback time.Duration) time.Dur
 		return fallback
 	}
 	return defaultServiceReadyTimeout
-}
-
-func podTolerations(tolerations []KubernetesToleration) []kubernetes.Toleration {
-	out := make([]kubernetes.Toleration, 0, len(tolerations))
-	for _, t := range tolerations {
-		out = append(out, kubernetes.Toleration(t))
-	}
-	return out
 }
 
 // errUnsupportedInKubernetes fails fast for functionality that needs a Docker daemon

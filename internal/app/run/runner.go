@@ -24,6 +24,7 @@ import (
 	"gitea.com/gitea/runner/act/artifactcache"
 	"gitea.com/gitea/runner/act/common"
 	"gitea.com/gitea/runner/act/container"
+	"gitea.com/gitea/runner/act/container/kubernetes"
 	"gitea.com/gitea/runner/act/runner"
 	"gitea.com/gitea/runner/internal/pkg/client"
 	"gitea.com/gitea/runner/internal/pkg/config"
@@ -747,9 +748,9 @@ func warnIgnoredCacheSecret(cfg *config.Config) {
 // kubernetesConfig maps the runner's kubernetes settings onto the act runner's, which
 // keeps its own copy so the vendored act tree needs no kubernetes SDK.
 func kubernetesConfig(cfg config.Kubernetes) runner.KubernetesConfig {
-	tolerations := make([]runner.KubernetesToleration, 0, len(cfg.Tolerations))
+	tolerations := make([]kubernetes.Toleration, 0, len(cfg.Tolerations))
 	for _, t := range cfg.Tolerations {
-		tolerations = append(tolerations, runner.KubernetesToleration(t))
+		tolerations = append(tolerations, kubernetes.Toleration(t))
 	}
 
 	return runner.KubernetesConfig{
@@ -763,8 +764,8 @@ func kubernetesConfig(cfg config.Kubernetes) runner.KubernetesConfig {
 		PodAnnotations:         cfg.PodAnnotations,
 		NodeSelector:           cfg.NodeSelector,
 		Tolerations:            tolerations,
-		Resources:              runner.KubernetesResources(cfg.Resources),
-		SecurityContext:        runner.KubernetesSecurityContext(cfg.PodSecurityContext),
+		Resources:              kubernetes.PodResources(cfg.Resources),
+		SecurityContext:        kubernetes.PodSecurityContext(cfg.PodSecurityContext),
 		SchedulingTimeout:      cfg.SchedulingTimeout,
 		ServiceReadyTimeout:    cfg.ServiceReadyTimeout,
 		TerminationGracePeriod: cfg.TerminationGracePeriod,

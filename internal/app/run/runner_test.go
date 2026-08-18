@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"gitea.com/gitea/runner/act/container/kubernetes"
 	"gitea.com/gitea/runner/act/runner"
 	clientmocks "gitea.com/gitea/runner/internal/pkg/client/mocks"
 	"gitea.com/gitea/runner/internal/pkg/config"
@@ -217,9 +218,9 @@ func TestKubernetesConfigMapsEveryField(t *testing.T) {
 		PodLabels:              map[string]string{"team": "ci"},
 		PodAnnotations:         map[string]string{"owner": "platform"},
 		NodeSelector:           map[string]string{"kubernetes.io/arch": "amd64"},
-		Tolerations:            []runner.KubernetesToleration{{Key: "ci", Operator: "Equal", Value: "true", Effect: "NoSchedule"}},
-		Resources:              runner.KubernetesResources{RequestsCPU: "500m", LimitsMemory: "2Gi"},
-		SecurityContext:        runner.KubernetesSecurityContext{RunAsUser: &runAsUser},
+		Tolerations:            []kubernetes.Toleration{{Key: "ci", Operator: "Equal", Value: "true", Effect: "NoSchedule"}},
+		Resources:              kubernetes.PodResources{RequestsCPU: "500m", LimitsMemory: "2Gi"},
+		SecurityContext:        kubernetes.PodSecurityContext{RunAsUser: &runAsUser},
 		SchedulingTimeout:      7 * time.Minute,
 		ServiceReadyTimeout:    45 * time.Second,
 		TerminationGracePeriod: 20 * time.Second,
