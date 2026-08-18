@@ -18,7 +18,7 @@ import (
 )
 
 // JobContainerName is the name of the container a job's steps are executed in. Service
-// containers are named after their service id, so this must not collide with one.
+// containers cannot collide with it: AssignServiceContainerNames prefixes theirs.
 const JobContainerName = "job"
 
 // workspaceVolumeName is the emptyDir shared by every container in the Pod. It backs
@@ -84,11 +84,62 @@ type Toleration struct {
 // ServiceInput is one of a job's service containers, which becomes a sidecar in the
 // job's Pod rather than a container of its own.
 type ServiceInput struct {
-	Name       string
+	// Name is the service id the workflow gave it, which stays the user's handle for it:
+	// `job.services.<name>`, log lines, warnings.
+	Name string
+	// ContainerName is what that service is called inside the Pod, which Kubernetes
+	// constrains far more tightly. Assigned by AssignServiceContainerNames.
+	ContainerName string
+
 	Image      string
 	Entrypoint []string
 	Cmd        []string
 	Env        []string
+}
+
+// invalidContainerNameChars matches everything an RFC 1123 label may not contain. Container
+// names are labels, not subdomains, so a dot is invalid here where it is fine in a Pod name.
+var invalidContainerNameChars = regexp.MustCompile(`[^a-z0-9-]`)
+
+// maxContainerName is the RFC 1123 label limit.
+const maxContainerName = 63
+
+// AssignServiceContainerNames gives every service a container name Kubernetes will accept and
+// no two services share. A service id is the workflow author's, so it may hold anything YAML
+// allows — an underscore alone makes the API server reject the entire Pod, taking the job with
+// it — and two ids that differ only outside the permitted set collapse onto one name.
+//
+// The svc- prefix also keeps services clear of JobContainerName, which a service called "job"
+// would otherwise collide with.
+func AssignServiceContainerNames(services []ServiceInput) {
+	used := map[string]bool{JobContainerName: true}
+	for i := range services {
+		base := serviceContainerName(services[i].Name)
+		name := base
+		for n := 2; used[name]; n++ {
+			suffix := fmt.Sprintf("-%d", n)
+			name = trimContainerName(base, len(suffix)) + suffix
+		}
+		used[name] = true
+		services[i].ContainerName = name
+	}
+}
+
+func serviceContainerName(id string) string {
+	name := strings.Trim(invalidContainerNameChars.ReplaceAllString(strings.ToLower(id), "-"), "-")
+	if name == "" {
+		name = "service"
+	}
+	return trimContainerName("svc-"+name, 0)
+}
+
+// trimContainerName caps a name at the label limit, leaving room for a suffix, and never ends
+// on the "-" a truncation may have landed on.
+func trimContainerName(name string, reserve int) string {
+	if limit := maxContainerName - reserve; len(name) > limit {
+		name = name[:limit]
+	}
+	return strings.TrimRight(name, "-")
 }
 
 // PodInput describes the Pod to run a job in. It is the kubernetes analogue of
@@ -180,7 +231,7 @@ func BuildPod(input *PodInput, capAdd, capDrop []string) (*corev1.Pod, error) {
 
 	for _, service := range input.Services {
 		containers = append(containers, corev1.Container{
-			Name:            service.Name,
+			Name:            service.ContainerName,
 			Image:           service.Image,
 			Command:         service.Entrypoint,
 			Args:            service.Cmd,

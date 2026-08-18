@@ -74,6 +74,7 @@ func NewPodEnvironment(client *Client, input *PodInput) *PodEnvironment {
 	// actually created in. The owner reference is only emitted when it matches, and left
 	// empty it never would.
 	input.Namespace = namespace
+	AssignServiceContainerNames(input.Services)
 
 	return &PodEnvironment{
 		client:    client,
@@ -122,7 +123,7 @@ func (e *PodEnvironment) Start(_ bool) common.Executor {
 
 		if timeout := e.input.ServiceReadyTimeout; timeout >= 0 {
 			for _, service := range e.input.Services {
-				if err := e.waitForContainerReady(ctx, service.Name, timeout); err != nil {
+				if err := e.waitForContainerReady(ctx, service.ContainerName, timeout); err != nil {
 					return err
 				}
 			}

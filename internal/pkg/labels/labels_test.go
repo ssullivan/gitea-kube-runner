@@ -144,6 +144,8 @@ func TestPickPlatform(t *testing.T) {
 		"ubuntu:docker://node:18",
 		"k8s:kubernetes://node:18",
 		"self-hosted:host",
+		"bare-docker:docker",
+		"bare-k8s:kubernetes",
 	)
 
 	tests := []struct {
@@ -157,6 +159,11 @@ func TestPickPlatform(t *testing.T) {
 		{"first match wins", []string{"self-hosted", "ubuntu"}, "-self-hosted"},
 		{"unknown falls back to default", []string{"windows"}, "docker.gitea.com/runner-images:ubuntu-latest"},
 		{"no runsOn falls back to default", nil, "docker.gitea.com/runner-images:ubuntu-latest"},
+		// A label naming no image has to stay empty. A bare "docker://" is non-empty, so
+		// runsOnImage would return it instead of falling through to Config.Platforms, and
+		// the job would be skipped as an unsupported platform.
+		{"docker without an image stays empty", []string{"bare-docker"}, ""},
+		{"kubernetes without an image stays empty", []string{"bare-k8s"}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

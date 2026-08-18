@@ -71,19 +71,32 @@ func (l Labels) RequireKubernetes() bool {
 	return false
 }
 
+// schemePrefixed marks an image with the backend that runs it. An argument-less label
+// ("ubuntu-latest:docker") keeps producing the empty string it always did, because a bare
+// "docker://" is non-empty and would stop runsOnImage falling through to Config.Platforms,
+// which is where such a label's image has always come from.
+func schemePrefixed(scheme, arg string) string {
+	image := strings.TrimPrefix(arg, "//")
+	if image == "" {
+		return ""
+	}
+	return scheme + image
+}
+
 // PickPlatform resolves a job's runs-on values against this runner's labels. The
-// result is always one of: "docker://<image>", "kubernetes://<image>", or the host-mode
-// marker "-self-hosted" — callers that need the bare image must strip the scheme prefix
-// themselves, since the prefix is what lets them tell backends apart.
+// result is always one of: "docker://<image>", "kubernetes://<image>", the host-mode
+// marker "-self-hosted", or "" for a label that names no image — callers that need the
+// bare image must strip the scheme prefix themselves, since the prefix is what lets them
+// tell backends apart.
 func (l Labels) PickPlatform(runsOn []string) string {
 	platforms := make(map[string]string, len(l))
 	for _, label := range l {
 		switch label.Schema {
 		case SchemeDocker:
 			// "//" will be ignored
-			platforms[label.Name] = "docker://" + strings.TrimPrefix(label.Arg, "//")
+			platforms[label.Name] = schemePrefixed("docker://", label.Arg)
 		case SchemeKubernetes:
-			platforms[label.Name] = "kubernetes://" + strings.TrimPrefix(label.Arg, "//")
+			platforms[label.Name] = schemePrefixed("kubernetes://", label.Arg)
 		case SchemeHost:
 			platforms[label.Name] = "-self-hosted"
 		default:

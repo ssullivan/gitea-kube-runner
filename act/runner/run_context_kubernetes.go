@@ -100,11 +100,14 @@ func (rc *RunContext) startPodEnvironment() common.Executor {
 		}
 		rc.JobContainer = pod
 
-		for _, service := range services {
+		// Read back from the input: the container names are assigned there, and a sidecar
+		// view addressing a service by anything else would look up a container that the Pod
+		// spec never named.
+		for _, service := range input.Services {
 			rc.serviceContainers = append(rc.serviceContainers, &serviceContainer{
 				name:      service.Name,
 				image:     service.Image,
-				container: kubernetes.NewSidecarView(pod, service.Name),
+				container: kubernetes.NewSidecarView(pod, service.ContainerName),
 			})
 		}
 
@@ -186,13 +189,18 @@ func imagePullPolicy(configured string, forcePull bool) string {
 }
 
 // serviceReadyTimeout lets the kubernetes section set its own, since sidecars sharing a Pod
-// are not waited on the way a daemon's service containers are. Unset falls back to the
-// docker setting, which is what this backend used before the field was read at all.
+// are not waited on the way a daemon's service containers are. Unset falls back to the docker
+// setting, and unset there to the same default the docker backend applies: zero has to become
+// a real bound, or a sidecar wedged in ContainerCreating holds the job until the task deadline
+// with nothing to cut it short. Negative still means do not wait at all.
 func serviceReadyTimeout(kcfg KubernetesConfig, fallback time.Duration) time.Duration {
 	if kcfg.ServiceReadyTimeout != 0 {
 		return kcfg.ServiceReadyTimeout
 	}
-	return fallback
+	if fallback != 0 {
+		return fallback
+	}
+	return defaultServiceReadyTimeout
 }
 
 func podTolerations(tolerations []KubernetesToleration) []kubernetes.Toleration {

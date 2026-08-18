@@ -134,6 +134,8 @@ func TestServiceReadyTimeout(t *testing.T) {
 		"the kubernetes section wins when it is set")
 	require.Equal(t, docker, serviceReadyTimeout(KubernetesConfig{}, docker),
 		"unset falls back to the docker setting rather than becoming no wait at all")
+	require.Equal(t, defaultServiceReadyTimeout, serviceReadyTimeout(KubernetesConfig{}, 0),
+		"unset everywhere still has to bound the wait, or a stuck sidecar hangs the job")
 	require.Equal(t, -1*time.Second, serviceReadyTimeout(KubernetesConfig{ServiceReadyTimeout: -1 * time.Second}, docker),
 		"a negative value disables waiting and must not be treated as unset")
 }

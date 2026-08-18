@@ -4,6 +4,8 @@
 package kubernetes
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,6 +125,39 @@ func TestBuildPodOwnerReference(t *testing.T) {
 	}
 }
 
+func TestAssignServiceContainerNames(t *testing.T) {
+	// A service id is the workflow author's and may hold anything YAML allows. An underscore
+	// alone had the API server reject the whole Pod, so the job failed before a step ran.
+	services := []ServiceInput{
+		{Name: "my_db"},
+		{Name: "Redis Cache"},
+		{Name: "job"},   // would collide with the job container
+		{Name: "my-db"}, // collides with my_db once sanitised
+		{Name: "_"},     // nothing survives sanitising
+		{Name: strings.Repeat("x", 80)},
+	}
+	AssignServiceContainerNames(services)
+
+	valid := regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	seen := map[string]bool{JobContainerName: false}
+	for _, s := range services {
+		assert.LessOrEqual(t, len(s.ContainerName), maxContainerName, "%q is over the label limit", s.Name)
+		assert.Regexp(t, valid, s.ContainerName, "%q produced a name kubernetes rejects", s.Name)
+		assert.NotEqual(t, JobContainerName, s.ContainerName, "%q collided with the job container", s.Name)
+		assert.False(t, seen[s.ContainerName], "%q reused the name %q", s.Name, s.ContainerName)
+		seen[s.ContainerName] = true
+	}
+
+	assert.Equal(t, "svc-my-db", services[0].ContainerName)
+	assert.Equal(t, "svc-redis-cache", services[1].ContainerName)
+	assert.Equal(t, "svc-job", services[2].ContainerName)
+	assert.Equal(t, "svc-my-db-2", services[3].ContainerName, "a collision has to be broken, not silently shared")
+	assert.Equal(t, "svc-service", services[4].ContainerName)
+
+	// The id stays the user's handle: job.services.<id> and the logs still use it.
+	assert.Equal(t, "my_db", services[0].Name)
+}
+
 func TestBuildPodMountsOneVolumeAtEachPath(t *testing.T) {
 	input := minimalInput()
 	input.MountPaths = []string{"/workspace", "/var/run/act", "/workspace", ""}
@@ -150,16 +185,17 @@ func TestBuildPodServicesBecomeSidecars(t *testing.T) {
 		{Name: "redis", Image: "redis:7", Env: []string{"A=1"}},
 		{Name: "postgres", Image: "postgres:16", Cmd: []string{"-c", "log_statement=all"}},
 	}
+	AssignServiceContainerNames(input.Services)
 
 	pod, err := BuildPod(input, nil, nil)
 	require.NoError(t, err)
 
 	require.Len(t, pod.Spec.Containers, 3)
-	redis := containerByName(t, pod, "redis")
+	redis := containerByName(t, pod, "svc-redis")
 	assert.Equal(t, "redis:7", redis.Image)
 	assert.Equal(t, []corev1.EnvVar{{Name: "A", Value: "1"}}, redis.Env)
 
-	postgres := containerByName(t, pod, "postgres")
+	postgres := containerByName(t, pod, "svc-postgres")
 	assert.Equal(t, []string{"-c", "log_statement=all"}, postgres.Args)
 	// Sidecars share the workspace so a service can read fixtures the job staged.
 	assert.Equal(t, containerByName(t, pod, JobContainerName).VolumeMounts, postgres.VolumeMounts)
