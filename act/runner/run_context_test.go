@@ -17,6 +17,7 @@ import (
 
 	"gitea.com/gitea/runner/act/common"
 	"gitea.com/gitea/runner/act/container"
+	"gitea.com/gitea/runner/act/container/kubernetes"
 
 	"gitea.dev/actionslib/pkg/exprparser"
 	"gitea.dev/actionslib/pkg/model"
@@ -801,6 +802,61 @@ func TestRunContextRunsOnPlatformNames(t *testing.T) {
 	assertObject.Equal([]string{}, rc.runsOnPlatformNames(context.Background()))
 }
 
+func TestRunContextExecBackend(t *testing.T) {
+	tests := []struct {
+		name           string
+		platform       string // the resolved runs-on image/marker, as labels.PickPlatform (or Config.Platforms) would return it
+		containerImage string // the job's container: field, empty for none
+		want           execBackend
+	}{
+		{"docker label", "docker://node:18", "", backendDocker},
+		{"kubernetes label", "kubernetes://node:18", "", backendKubernetes},
+		{"kubernetes label with explicit container image stays kubernetes", "kubernetes://node:18", "alpine:latest", backendKubernetes},
+		{"self-hosted with no explicit container is host", "-self-hosted", "", backendHost},
+		{"self-hosted with explicit container forces docker", "-self-hosted", "alpine:latest", backendDocker},
+		{"bare image with no scheme is docker", "node:18", "", backendDocker},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			jobYAML := "runs-on: ubuntu-latest"
+			if tt.containerImage != "" {
+				jobYAML += "\ncontainer: " + tt.containerImage
+			}
+			rc := createIfTestRunContext(map[string]*model.Job{
+				"job1": createJob(t, jobYAML, ""),
+			})
+			rc.Config.Platforms["ubuntu-latest"] = tt.platform
+			require.Equal(t, tt.want, rc.execBackend(context.Background()))
+			require.Equal(t, tt.want == backendHost, rc.IsHostEnv(context.Background()))
+		})
+	}
+}
+
+// A composite action's RunContext has a synthetic job with no runs-on, so the backend can
+// only be read from what the job is already running in. Getting docker here let the
+// `uses: docker://` and `runs.using: docker` guards through for steps inside a composite.
+func TestExecBackendFollowsTheJobContainer(t *testing.T) {
+	rc := createIfTestRunContext(map[string]*model.Job{"job1": createJob(t, "name: no runs-on", "")})
+	require.Equal(t, backendDocker, rc.execBackend(context.Background()))
+
+	rc.JobContainer = &kubernetes.PodEnvironment{}
+	require.Equal(t, backendKubernetes, rc.execBackend(context.Background()))
+}
+
+func TestExecBackendString(t *testing.T) {
+	// These reach the job log, where they are how an operator tells which backend ran a job.
+	require.Equal(t, "docker", backendDocker.String())
+	require.Equal(t, "host", backendHost.String())
+	require.Equal(t, "kubernetes", backendKubernetes.String())
+}
+
+func TestStripImageScheme(t *testing.T) {
+	require.Equal(t, "node:18", stripImageScheme("docker://node:18"))
+	require.Equal(t, "node:18", stripImageScheme("kubernetes://node:18"))
+	require.Equal(t, "-self-hosted", stripImageScheme("-self-hosted"))
+	require.Equal(t, "node:18", stripImageScheme("node:18"))
+}
+
 func TestRunContextIsEnabled(t *testing.T) {
 	log.SetLevel(log.DebugLevel)
 	assertObject := assert.New(t)
@@ -990,13 +1046,14 @@ func TestPrintStartJobContainerGroupGolden(t *testing.T) {
 	entry := logger.WithFields(log.Fields{"job": "j1"})
 	ctx := common.WithLogger(context.Background(), entry)
 
-	printStartJobContainerGroup(ctx, "node:20", "GITEA-WORKFLOW-build-JOB-test", "gitea-runner-network")()
+	printStartJobContainerGroup(ctx, "node:20", "GITEA-WORKFLOW-build-JOB-test", "gitea-runner-network", backendDocker)()
 
 	want := strings.Join([]string{
 		"[j1]   | ::group::Starting job container",
 		"[j1]   | image: node:20",
 		"[j1]   | name: GITEA-WORKFLOW-build-JOB-test",
 		"[j1]   | network: gitea-runner-network",
+		"[j1]   | backend: docker",
 		"[j1]   | ::endgroup::",
 		"",
 	}, "\n")

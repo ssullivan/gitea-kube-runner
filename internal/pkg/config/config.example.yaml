@@ -234,6 +234,57 @@ host:
   # If it's empty, $HOME/.cache/act/ will be used.
   #workdir_parent:
 
+# Configuration for the Kubernetes Pod execution backend, used by runner labels with
+# the "kubernetes" schema, e.g. "ubuntu-latest:kubernetes://docker.gitea.com/runner-images:ubuntu-latest".
+# Each job runs in its own Pod; the workspace is an ephemeral emptyDir with no cross-job
+# persistence, and steps that need a Docker daemon (uses: docker://..., actions with
+# runs.using: docker) are not supported.
+kubernetes:
+  # Namespace job Pods are created in.
+  # If empty, uses the in-cluster namespace when running inside a Pod, otherwise "default".
+  #namespace: ""
+  # Path to a kubeconfig file. If empty, uses in-cluster config when running inside a
+  # Pod, otherwise the default kubeconfig loading rules (KUBECONFIG, $HOME/.kube/config).
+  #kubeconfig: ""
+  # Context to use from kubeconfig. If empty, uses the kubeconfig's current-context.
+  #kubeconfig_context: ""
+  # ServiceAccount job Pods run as. If empty, uses the namespace's default ServiceAccount.
+  #service_account_name: ""
+  # Names of existing docker-registry Secrets attached to job Pods for private image pulls.
+  #image_pull_secrets: []
+  # Always, IfNotPresent, or Never. If empty, kubelet decides based on the image tag.
+  #image_pull_policy: ""
+  # Extra labels/annotations merged onto every job Pod.
+  #pod_labels: {}
+  #pod_annotations: {}
+  # nodeSelector and tolerations applied to every job Pod.
+  #node_selector: {}
+  #tolerations: []
+  # Default CPU/memory requests and limits for the job container, using Kubernetes
+  # quantity syntax (e.g. "500m", "512Mi"). Empty leaves that field unset.
+  #resources:
+  #  requests_cpu: ""
+  #  requests_memory: ""
+  #  limits_cpu: ""
+  #  limits_memory: ""
+  # Pod-level securityContext defaults for job Pods.
+  #pod_security_context:
+  #  run_as_non_root:
+  #  run_as_user:
+  #  fs_group:
+  # How long to wait for a job Pod to reach Running before failing the job.
+  #scheduling_timeout: 5m
+  # How long a job waits for a service sidecar that declares a healthcheck to become
+  # healthy. A negative value starts the steps without waiting.
+  #service_ready_timeout: 5m
+  # Grace period given to a job Pod on delete.
+  #termination_grace_period: 30s
+  # Always require a reachable cluster, even if not required by runner's labels.
+  #require_kubernetes: false
+  # Timeout to wait for the cluster to be reachable at startup, if kubernetes is
+  # required by require_kubernetes or runner. 0 checks once instead of retrying.
+  #connect_timeout: 0s
+
 # Optional local task-admission checks. Disabled by default. When enabled, low
 # disk space or a failing script pauses new task fetching; existing jobs continue.
 # No health checks run while any job is active; the last result is reused until idle.

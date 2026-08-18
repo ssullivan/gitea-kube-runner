@@ -24,6 +24,7 @@ import (
 	"gitea.com/gitea/runner/act/artifactcache"
 	"gitea.com/gitea/runner/act/common"
 	"gitea.com/gitea/runner/act/container"
+	"gitea.com/gitea/runner/act/container/kubernetes"
 	"gitea.com/gitea/runner/act/runner"
 	"gitea.com/gitea/runner/internal/pkg/client"
 	"gitea.com/gitea/runner/internal/pkg/config"
@@ -522,6 +523,7 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 		ValidVolumes:                      r.cfg.Container.ValidVolumes,
 		InsecureSkipTLS:                   r.cfg.Runner.Insecure,
 		RunnerName:                        r.name,
+		Kubernetes:                        kubernetesConfig(r.cfg.Kubernetes),
 	}
 
 	rr, err := runner.New(runnerConfig)
@@ -741,4 +743,31 @@ func warnIgnoredCacheSecret(cfg *config.Config) {
 		key = "cache.external_secret_file"
 	}
 	log.Warnf("%s is set but cache.external_server is not; the built-in cache server does not use a shared secret, so the value is ignored", key)
+}
+
+// kubernetesConfig maps the runner's kubernetes settings, as the YAML declares them, onto
+// the act runner's, which holds the backend's own types.
+func kubernetesConfig(cfg config.Kubernetes) runner.KubernetesConfig {
+	tolerations := make([]kubernetes.Toleration, 0, len(cfg.Tolerations))
+	for _, t := range cfg.Tolerations {
+		tolerations = append(tolerations, kubernetes.Toleration(t))
+	}
+
+	return runner.KubernetesConfig{
+		Namespace:              cfg.Namespace,
+		Kubeconfig:             cfg.Kubeconfig,
+		KubeconfigContext:      cfg.KubeconfigContext,
+		ServiceAccountName:     cfg.ServiceAccountName,
+		ImagePullSecrets:       cfg.ImagePullSecrets,
+		ImagePullPolicy:        cfg.ImagePullPolicy,
+		PodLabels:              cfg.PodLabels,
+		PodAnnotations:         cfg.PodAnnotations,
+		NodeSelector:           cfg.NodeSelector,
+		Tolerations:            tolerations,
+		Resources:              kubernetes.PodResources(cfg.Resources),
+		SecurityContext:        kubernetes.PodSecurityContext(cfg.PodSecurityContext),
+		SchedulingTimeout:      cfg.SchedulingTimeout,
+		ServiceReadyTimeout:    cfg.ServiceReadyTimeout,
+		TerminationGracePeriod: cfg.TerminationGracePeriod,
+	}
 }

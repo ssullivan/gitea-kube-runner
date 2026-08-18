@@ -18,6 +18,12 @@ import (
 	"golang.org/x/text/transform"
 )
 
+// ParseEnvFile reads the env file at srcPath out of the container and merges it into
+// env, for backends implemented outside this package.
+func ParseEnvFile(e Container, srcPath string, env *map[string]string) common.Executor {
+	return parseEnvFile(e, srcPath, env)
+}
+
 func parseEnvFile(e Container, srcPath string, env *map[string]string) common.Executor {
 	localEnv := *env
 	return func(ctx context.Context) error {

@@ -184,6 +184,45 @@ runner:
 	assert.Equal(t, "/hooks/completed.sh", cfg.Runner.Hooks.JobCompleted)
 }
 
+func TestLoadDefault_DefaultsKubernetes(t *testing.T) {
+	cfg, err := LoadDefault("")
+	require.NoError(t, err)
+	assert.Equal(t, 5*time.Minute, cfg.Kubernetes.SchedulingTimeout)
+	assert.Equal(t, 30*time.Second, cfg.Kubernetes.TerminationGracePeriod)
+	assert.Empty(t, cfg.Kubernetes.Namespace)
+	assert.False(t, cfg.Kubernetes.RequireKubernetes)
+}
+
+func TestLoadDefault_LoadsKubernetes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+kubernetes:
+  namespace: ci
+  service_account_name: runner
+  image_pull_secrets:
+    - regcred
+  node_selector:
+    kubernetes.io/arch: amd64
+  resources:
+    requests_cpu: 500m
+    limits_memory: 2Gi
+  scheduling_timeout: 10m
+  require_kubernetes: true
+`), 0o600))
+
+	cfg, err := LoadDefault(path)
+	require.NoError(t, err)
+	assert.Equal(t, "ci", cfg.Kubernetes.Namespace)
+	assert.Equal(t, "runner", cfg.Kubernetes.ServiceAccountName)
+	assert.Equal(t, []string{"regcred"}, cfg.Kubernetes.ImagePullSecrets)
+	assert.Equal(t, map[string]string{"kubernetes.io/arch": "amd64"}, cfg.Kubernetes.NodeSelector)
+	assert.Equal(t, "500m", cfg.Kubernetes.Resources.RequestsCPU)
+	assert.Equal(t, "2Gi", cfg.Kubernetes.Resources.LimitsMemory)
+	assert.Equal(t, 10*time.Minute, cfg.Kubernetes.SchedulingTimeout)
+	assert.True(t, cfg.Kubernetes.RequireKubernetes)
+}
+
 // TestLoadDefault_MalformedYAMLReturnsParseError pins the error surfaced for
 // invalid YAML to the canonical "parse config file" message rather than the
 // "for defaults metadata" variant — i.e. the main yaml.Unmarshal runs first.

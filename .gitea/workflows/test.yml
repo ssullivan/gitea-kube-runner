@@ -45,6 +45,11 @@ jobs:
       # after `make test` so the images it needs are already present on the host daemon.
       - name: test against dind image
         run: make test-dind
+      # The kubernetes backend's exec, log streaming and tar-over-exec copying need a
+      # real kubelet, so they run against a throwaway kind cluster. Self-skips when kind
+      # is not installed.
+      - name: test kubernetes backend
+        run: make test-k8s
       - name: coverage report
         run: |
           make coverage-report

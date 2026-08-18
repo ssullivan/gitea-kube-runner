@@ -319,6 +319,10 @@ func execAsDocker(ctx context.Context, step actionStep, actionName, actionDir, b
 	rc := step.getRunContext()
 	action := step.getActionModel()
 
+	if rc.execBackend(ctx) == backendKubernetes {
+		return errUnsupportedInKubernetes(fmt.Sprintf("action %q with runs.using: docker", actionName))
+	}
+
 	var prepImage common.Executor
 	var image string
 	forcePull := false

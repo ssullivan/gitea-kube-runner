@@ -66,6 +66,9 @@ func (sd *stepDocker) runUsesContainer() common.Executor {
 
 	return func(ctx context.Context) error {
 		image := strings.TrimPrefix(step.Uses, "docker://")
+		if rc.execBackend(ctx) == backendKubernetes {
+			return errUnsupportedInKubernetes("uses: docker://" + image)
+		}
 		eval := rc.NewExpressionEvaluator(ctx)
 		cmd, err := shellquote.Split(eval.Interpolate(ctx, step.With["args"]))
 		if err != nil {

@@ -16,6 +16,7 @@ import (
 
 	"gitea.com/gitea/runner/act/common"
 	"gitea.com/gitea/runner/act/container"
+	"gitea.com/gitea/runner/act/container/kubernetes"
 
 	"gitea.dev/actionslib/pkg/model"
 	docker_container "github.com/moby/moby/api/types/container"
@@ -98,6 +99,28 @@ type Config struct {
 	RunnerName                        string                       // name this runner registered with, reported as `runner.name`, defaults to the hostname
 	JobStartedHook                    string                       // script run inside the job environment before the job's first step; ACTIONS_RUNNER_HOOK_JOB_STARTED is read from Env when empty
 	JobCompletedHook                  string                       // script run inside the job environment after the job's last step; ACTIONS_RUNNER_HOOK_JOB_COMPLETED is read from Env when empty
+	Kubernetes                        KubernetesConfig             // settings for the kubernetes execution backend, used by jobs whose runs-on label selects it
+}
+
+// KubernetesConfig configures the kubernetes execution backend. It holds the backend's own
+// types rather than restating them: this package already depends on that one, so a third
+// copy of the same fields bought nothing but two conversions to keep in step.
+type KubernetesConfig struct {
+	Namespace              string
+	Kubeconfig             string
+	KubeconfigContext      string
+	ServiceAccountName     string
+	ImagePullSecrets       []string
+	ImagePullPolicy        string
+	PodLabels              map[string]string
+	PodAnnotations         map[string]string
+	NodeSelector           map[string]string
+	Tolerations            []kubernetes.Toleration
+	Resources              kubernetes.PodResources
+	SecurityContext        kubernetes.PodSecurityContext
+	SchedulingTimeout      time.Duration
+	ServiceReadyTimeout    time.Duration // 0 falls back to the docker backend's service_ready_timeout; negative disables waiting
+	TerminationGracePeriod time.Duration
 }
 
 // RunnerDebug reports whether debug logging is on, exposed as `runner.debug` and
