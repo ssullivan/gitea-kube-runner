@@ -280,7 +280,8 @@ func LoadDefault(file string) (*Config, error) {
 	if cfg.Kubernetes.TerminationGracePeriod <= 0 {
 		cfg.Kubernetes.TerminationGracePeriod = 30 * time.Second
 	}
-	// connect_timeout defaults to 0 (wait indefinitely), same as container.docker_timeout.
+	// connect_timeout is left at 0, which checks the cluster once and fails rather than
+	// retrying, matching what daemon.go does with it.
 	if cfg.Runner.FetchTimeout <= 0 {
 		cfg.Runner.FetchTimeout = 5 * time.Second
 	}

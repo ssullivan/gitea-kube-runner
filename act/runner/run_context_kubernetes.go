@@ -42,18 +42,25 @@ func (rc *RunContext) startPodEnvironment() common.Executor {
 		})
 
 		name := rc.jobContainerName()
-		rc.Env["JOB_CONTAINER_NAME"] = name
+		// The name the Pod is actually created under, not the docker-style one it is derived
+		// from: a step addressing the workload by this would otherwise get NotFound.
+		rc.Env["JOB_CONTAINER_NAME"] = kubernetes.PodName(name)
+
+		kcfg := rc.Config.Kubernetes
 
 		envList := make([]string, 0)
-		envList = append(envList, rc.runnerEnvFrom(kubernetes.RunnerContext())...)
+		envList = append(envList, rc.runnerEnvFrom(kubernetes.RunnerContext(kcfg.NodeSelector))...)
 		envList = append(envList, fmt.Sprintf("%s=%s", "LANG", "C.UTF-8"))
 
 		ext := container.LinuxContainerEnvironmentExtensions{}
 		workdir := ext.ToContainerPath(rc.Config.Workdir)
 
+		if err := rc.checkUnsupportedCredentials(); err != nil {
+			return err
+		}
+
 		services := rc.podServiceInputs(ctx)
 
-		kcfg := rc.Config.Kubernetes
 		maxLifetime := rc.Config.ContainerMaxLifetime
 		// Resolved once and shared with the orchestration around the backend, so
 		// kubernetes.service_ready_timeout governs both waits rather than only the inner one.
@@ -178,15 +185,41 @@ func (rc *RunContext) podServiceInputs(ctx context.Context) []kubernetes.Service
 			logger.Warnf("The service '%s' declares volumes, which the kubernetes backend does not support; they are ignored.", serviceID)
 		}
 
+		// A sidecar with no probe is ready the instant it starts, so without this the job's
+		// steps run against a service that may not be listening yet.
+		health, err := container.ParseServiceHealthCheck(rc.ExprEval.Interpolate(ctx, spec.Options))
+		if err != nil {
+			logger.Warnf("The service '%s' has options the runner could not read, so its readiness is not waited for: %v", serviceID, err)
+		} else if !health.Declared() {
+			logger.Warnf("The service '%s' declares no --health-cmd, so its steps start as soon as the container does rather than when it is ready.", serviceID)
+		}
+
 		services = append(services, kubernetes.ServiceInput{
-			Name:  serviceID,
-			Image: serviceImage,
-			Cmd:   interpolatedCmd,
-			Env:   envs,
+			Name:        serviceID,
+			Image:       serviceImage,
+			Cmd:         interpolatedCmd,
+			Env:         envs,
+			HealthCheck: health,
 		})
 	}
 
 	return services
+}
+
+// checkUnsupportedCredentials fails a job that configured registry credentials, which this
+// backend cannot honour: the kubelet pulls the image, so credentials have to reach it as an
+// imagePullSecret. Ignoring them silently left the Pod in ImagePullBackOff with nothing to
+// say the configured credentials had never been read.
+func (rc *RunContext) checkUnsupportedCredentials() error {
+	if c := rc.Run.Job().Container(); c != nil && len(c.Credentials) > 0 {
+		return errUnsupportedInKubernetes("the job container's `credentials:`")
+	}
+	for serviceID, spec := range rc.Run.Job().Services {
+		if len(spec.Credentials) > 0 {
+			return errUnsupportedInKubernetes(fmt.Sprintf("the service %q `credentials:`", serviceID))
+		}
+	}
+	return nil
 }
 
 // imagePullPolicy lets force_pull ask for a re-pull the way it does for docker, since

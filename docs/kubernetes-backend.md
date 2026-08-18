@@ -39,7 +39,7 @@ The runner needs to create, inspect, exec into, read logs from, and delete Pods 
 
 | Resource | Verbs |
 | --- | --- |
-| `pods` | `create`, `get`, `list`, `watch`, `delete` |
+| `pods` | `create`, `get`, `delete` |
 | `pods/exec` | `create` |
 | `pods/log` | `get` |
 
@@ -47,9 +47,32 @@ The runner needs to create, inspect, exec into, read logs from, and delete Pods 
 
 The job's workspace is an `emptyDir` volume shared by every container in the Pod. It lives and dies with the Pod, so **nothing is cached between jobs** — including the tool cache that the Docker backend keeps in a named volume. Actions that download tooling re-download it on each job.
 
-A job's `services:` become sidecar containers in the same Pod. Because containers in a Pod share a network namespace, a service is reached on `localhost` at its own port rather than by service name. `service_ready_timeout` bounds how long the job waits for them before starting the steps; a service whose image declares no readiness probe reports no health, so set it to a negative value to start the steps without waiting.
+A job's `services:` become sidecar containers in the same Pod. Because containers in a Pod share a network namespace, a service is reached on `localhost` at its own port rather than by service name.
 
-Service `volumes:`, `ports:` and `options:` are ignored: the sidecar already shares the Pod's network, so its ports need no publishing, and there is no per-service volume model here.
+**A service is only waited for if it says how to check it.** Kubernetes calls a container ready the moment it starts unless it carries a readiness probe, so a service declaring none has its steps begin while it may still be starting. Declare one the same way you would for the Docker backend, and the runner translates it:
+
+```yaml
+    services:
+      postgres:
+        image: postgres:16
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=3s
+          --health-retries=5
+```
+
+`service_ready_timeout` bounds that wait — under `kubernetes:` if set, otherwise the `container:` value, otherwise five minutes. A negative value starts the steps without waiting at all. A service with no `--health-cmd` is logged as one nothing waits for, rather than being silently treated as ready.
+
+Service `volumes:` and `ports:` are ignored: the sidecar already shares the Pod's network, so its ports need no publishing, and there is no per-service volume model here. Of `options:`, only the `--health-*` flags are read.
+
+Service ids are the workflow's own, so they may contain characters Kubernetes container names cannot; the runner renames the container (`my_db` becomes `svc-my-db`) while `job.services.<id>` and the logs keep the id you wrote.
+
+### Secrets in a service's environment
+
+A service's `env:` is part of the Pod, so a value interpolated into it — `POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}` — is stored in the Pod object. Anything able to read Pods in that namespace can read it, and it sits in etcd unencrypted unless the cluster enables encryption at rest. The Docker backend keeps these in the local daemon instead, so this is worth knowing before moving such a workflow across.
+
+Steps' own environment is unaffected: it is passed per-exec and never written to the Pod. Where that distinction matters, put the value in a Secret the cluster already holds and reference it from the image's configuration rather than the workflow.
 
 The job image must provide `sh` and `tar`, which the backend uses to stage files into the workspace over the exec API — the same implicit requirement `docker cp` places on images today.
 

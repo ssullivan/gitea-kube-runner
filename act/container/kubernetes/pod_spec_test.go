@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"gitea.com/gitea/runner/act/container"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -277,4 +279,40 @@ func TestBuildPodSecurityContext(t *testing.T) {
 	assert.True(t, *sc.Privileged)
 	assert.Equal(t, []corev1.Capability{"NET_ADMIN"}, sc.Capabilities.Add)
 	assert.Equal(t, []corev1.Capability{"MKNOD"}, sc.Capabilities.Drop)
+}
+
+func TestBuildPodServiceReadinessProbe(t *testing.T) {
+	// Without a probe Kubernetes reports a container ready the moment it starts, so
+	// service_ready_timeout waits on nothing and steps race the service.
+	input := minimalInput()
+	input.Services = []ServiceInput{{
+		Name:  "postgres",
+		Image: "postgres:16",
+		HealthCheck: container.ServiceHealthCheck{
+			Test:        []string{"CMD-SHELL", "pg_isready -U postgres"},
+			Interval:    10 * time.Second,
+			Timeout:     3 * time.Second,
+			StartPeriod: 30 * time.Second,
+			Retries:     5,
+		},
+	}, {
+		Name:  "redis",
+		Image: "redis:7",
+	}}
+	AssignServiceContainerNames(input.Services)
+
+	pod, err := BuildPod(input, nil, nil)
+	require.NoError(t, err)
+
+	probe := containerByName(t, pod, "svc-postgres").ReadinessProbe
+	require.NotNil(t, probe)
+	require.NotNil(t, probe.Exec)
+	assert.Equal(t, []string{"/bin/sh", "-c", "pg_isready -U postgres"}, probe.Exec.Command)
+	assert.Equal(t, int32(10), probe.PeriodSeconds)
+	assert.Equal(t, int32(3), probe.TimeoutSeconds)
+	assert.Equal(t, int32(30), probe.InitialDelaySeconds)
+	assert.Equal(t, int32(5), probe.FailureThreshold)
+
+	assert.Nil(t, containerByName(t, pod, "svc-redis").ReadinessProbe, "a service declaring none gets none")
+	assert.Nil(t, readinessProbe(container.ServiceHealthCheck{Test: []string{"NONE"}}), "an explicitly disabled check is not a probe")
 }

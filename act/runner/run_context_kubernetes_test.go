@@ -83,7 +83,8 @@ func TestStartPodEnvironmentBuildsPodInput(t *testing.T) {
 	require.Equal(t, []string{"/workspace", "/var/run/act", "/opt/hostedtoolcache"}, input.MountPaths)
 	require.Contains(t, input.Env, "LANG=C.UTF-8")
 	require.Contains(t, input.Env, "RUNNER_TOOL_CACHE=/opt/hostedtoolcache")
-	require.Equal(t, input.Name, rc.Env["JOB_CONTAINER_NAME"], "steps read the pod's name from the environment")
+	require.Equal(t, kubernetes.PodName(input.Name), rc.Env["JOB_CONTAINER_NAME"],
+		"steps read the pod's real name from the environment, not the docker-style one it came from")
 
 	require.Equal(t, "ci", input.Namespace)
 	require.Equal(t, "runner-jobs", input.ServiceAccountName)
@@ -144,4 +145,34 @@ func TestImagePullPolicy(t *testing.T) {
 	require.Equal(t, "IfNotPresent", imagePullPolicy("IfNotPresent", true), "an explicit policy wins over force_pull")
 	require.Equal(t, "Always", imagePullPolicy("", true), "there is no pull step to force here, so it becomes a pull policy")
 	require.Empty(t, imagePullPolicy("", false), "unset leaves the kubelet its own default")
+}
+
+func TestStartPodEnvironmentRefusesCredentials(t *testing.T) {
+	// The kubelet pulls the image, so credentials have to reach it as an imagePullSecret.
+	// Ignoring them left the Pod in ImagePullBackOff with nothing saying they were unread.
+	for name, jobYAML := range map[string]string{
+		"job container": `runs-on: ubuntu-latest
+container:
+  image: private/img
+  credentials:
+    username: u
+    password: p`,
+		"service": `runs-on: ubuntu-latest
+services:
+  db:
+    image: private/db
+    credentials:
+      username: u
+      password: p`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rc := createIfTestRunContext(map[string]*model.Job{"job1": createJob(t, jobYAML, "")})
+			rc.Config.Platforms["ubuntu-latest"] = "kubernetes://node:18"
+			capturePodEnvironment(t)
+
+			err := rc.startPodEnvironment()(context.Background())
+			require.ErrorContains(t, err, "credentials")
+			require.ErrorContains(t, err, "unsupported in kubernetes execution mode")
+		})
+	}
 }

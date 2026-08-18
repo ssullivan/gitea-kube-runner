@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"gitea.com/gitea/runner/act/container"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -95,6 +97,49 @@ type ServiceInput struct {
 	Entrypoint []string
 	Cmd        []string
 	Env        []string
+
+	// HealthCheck is what the service declared through `options: --health-cmd ...`, which
+	// becomes the sidecar's readinessProbe. Without one Kubernetes calls a container ready
+	// the moment it starts, so there is nothing to wait for.
+	HealthCheck container.ServiceHealthCheck
+}
+
+// readinessProbe turns a declared healthcheck into the probe Kubernetes waits on. Zero
+// fields are left unset so the cluster's own defaults apply, as docker's would.
+func readinessProbe(check container.ServiceHealthCheck) *corev1.Probe {
+	if !check.Declared() {
+		return nil
+	}
+
+	var command []string
+	switch check.Test[0] {
+	case "CMD-SHELL":
+		command = []string{"/bin/sh", "-c", strings.Join(check.Test[1:], " ")}
+	case "CMD":
+		command = check.Test[1:]
+	case "NONE":
+		return nil
+	default:
+		command = check.Test
+	}
+	if len(command) == 0 {
+		return nil
+	}
+
+	probe := &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: command}}}
+	if check.Interval > 0 {
+		probe.PeriodSeconds = int32(check.Interval.Round(time.Second).Seconds())
+	}
+	if check.Timeout > 0 {
+		probe.TimeoutSeconds = int32(check.Timeout.Round(time.Second).Seconds())
+	}
+	if check.StartPeriod > 0 {
+		probe.InitialDelaySeconds = int32(check.StartPeriod.Round(time.Second).Seconds())
+	}
+	if check.Retries > 0 {
+		probe.FailureThreshold = int32(check.Retries)
+	}
+	return probe
 }
 
 // invalidContainerNameChars matches everything an RFC 1123 label may not contain. Container
@@ -239,6 +284,7 @@ func BuildPod(input *PodInput, capAdd, capDrop []string) (*corev1.Pod, error) {
 			ImagePullPolicy: corev1.PullPolicy(input.ImagePullPolicy),
 			VolumeMounts:    mounts,
 			SecurityContext: buildContainerSecurityContext(input.Privileged, nil, nil),
+			ReadinessProbe:  readinessProbe(service.HealthCheck),
 		})
 	}
 

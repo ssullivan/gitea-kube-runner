@@ -34,33 +34,43 @@ type PodEnvironment struct {
 }
 
 // RunnerContext is what a job Pod knows about itself, for the `runner` expression context
-// and the RUNNER_* variables. It answers arch from the runner's own architecture: the shared
-// Linux extensions ask a docker daemon instead, which in a cluster has none to ask, so every
-// step of every job both warned into the job log and left runner.arch empty.
-func RunnerContext() map[string]any {
+// and the RUNNER_* variables. The shared Linux extensions resolve arch through a docker
+// daemon, which a cluster has none of, so every step of every job warned into the job log and
+// left runner.arch empty.
+//
+// nodeSelector is consulted because the job runs wherever the cluster schedules it, not where
+// the runner runs: pinning kubernetes.io/arch is how an operator sends jobs to nodes of a
+// different architecture, and taking the runner's own would then hand steps the wrong value.
+func RunnerContext(nodeSelector map[string]string) map[string]any {
 	return map[string]any{
 		"os":         "Linux",
-		"arch":       runnerArch(),
+		"arch":       runnerArch(nodeSelector),
 		"temp":       "/tmp",
 		"tool_cache": container.DefaultToolCache,
 	}
 }
 
 // runnerArch maps to the values GitHub documents for runner.arch, as the docker backend does.
-func runnerArch() string {
-	switch runtime.GOARCH {
-	case "amd64":
+// Without a pinned node architecture it can only assume the cluster matches the runner, which
+// is right for the single-architecture case and documented for the rest.
+func runnerArch(nodeSelector map[string]string) string {
+	arch := runtime.GOARCH
+	if pinned := nodeSelector["kubernetes.io/arch"]; pinned != "" {
+		arch = pinned
+	}
+	switch arch {
+	case "amd64", "x86_64":
 		return "X64"
 	case "386":
 		return "X86"
-	case "arm64":
+	case "arm64", "aarch64":
 		return "ARM64"
 	}
-	return runtime.GOARCH
+	return arch
 }
 
 func (e *PodEnvironment) GetRunnerContext(context.Context) map[string]any {
-	return RunnerContext()
+	return RunnerContext(e.input.NodeSelector)
 }
 
 // NewPodEnvironment returns the execution environment for a job Pod. The Pod itself is

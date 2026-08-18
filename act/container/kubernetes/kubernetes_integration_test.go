@@ -73,6 +73,11 @@ func startPod(t *testing.T, input *PodInput) (*PodEnvironment, context.Context) 
 	if input.SchedulingTimeout == 0 {
 		input.SchedulingTimeout = 3 * time.Minute
 	}
+	if input.ImagePullPolicy == "" {
+		// :latest defaults to Always, which re-pulls and defeats the side-load these tests
+		// rely on to need no registry.
+		input.ImagePullPolicy = "IfNotPresent"
+	}
 
 	env := NewPodEnvironment(client, input)
 

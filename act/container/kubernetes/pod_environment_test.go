@@ -27,12 +27,18 @@ func podWith(phase corev1.PodPhase, statuses []corev1.ContainerStatus, spec []co
 func TestRunnerContextAnswersArchWithoutADockerDaemon(t *testing.T) {
 	// The shared Linux extensions resolve arch through the docker daemon, which a job pod's
 	// cluster has none of: runner.arch came back empty and every step warned into the job log.
-	ctx := (&PodEnvironment{}).GetRunnerContext(context.Background())
+	ctx := (&PodEnvironment{input: &PodInput{}}).GetRunnerContext(context.Background())
 
 	assert.Equal(t, "Linux", ctx["os"])
 	assert.Equal(t, container.DefaultToolCache, ctx["tool_cache"])
 	assert.NotEmpty(t, ctx["arch"], "an empty runner.arch is what this exists to prevent")
 	assert.Contains(t, []string{"X64", "X86", "ARM64", runtime.GOARCH}, ctx["arch"])
+
+	// A pinned node architecture is where the job actually runs, so it wins over the
+	// runner's: taking the runner's would hand an arm64 pod an x86_64 download url.
+	pinned := (&PodEnvironment{input: &PodInput{NodeSelector: map[string]string{"kubernetes.io/arch": "arm64"}}}).
+		GetRunnerContext(context.Background())
+	assert.Equal(t, "ARM64", pinned["arch"])
 }
 
 func TestPodInfoState(t *testing.T) {
