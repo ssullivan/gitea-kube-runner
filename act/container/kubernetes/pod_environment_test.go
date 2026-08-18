@@ -5,6 +5,7 @@ package kubernetes
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"testing"
 
@@ -13,7 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func podWith(phase corev1.PodPhase, statuses []corev1.ContainerStatus, spec []corev1.Container) *corev1.Pod {
@@ -65,6 +68,11 @@ func TestPodInfoState(t *testing.T) {
 
 	pending := podWith(corev1.PodPending, nil, nil)
 	assert.Equal(t, "created", podInfo(pending, JobContainerName).State)
+
+	// A container with no status of its own must not read as running off a Pod that is, or
+	// every assertion made through a sidecar view passes whatever the sidecar is doing.
+	noStatus := podWith(corev1.PodRunning, nil, nil)
+	assert.Equal(t, "created", podInfo(noStatus, JobContainerName).State)
 }
 
 // A readiness probe is the closest equivalent to a docker healthcheck, so it is the
@@ -110,6 +118,26 @@ func TestIsTerminalWaitingReason(t *testing.T) {
 	// once it has given up on the immediate retry, is the terminal one.
 	for _, reason := range []string{"", "ErrImagePull", "ContainerCreating", "PodInitializing"} {
 		assert.False(t, isTerminalWaitingReason(reason), reason)
+	}
+}
+
+func TestTransientGetError(t *testing.T) {
+	// An RBAC mistake is the cluster's answer and stays one, so it fails the job at once
+	// rather than after the whole scheduling timeout.
+	for _, err := range []error{
+		apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "job", errors.New("nope")),
+		apierrors.NewUnauthorized("no token"),
+	} {
+		assert.False(t, transientGetError(err), err)
+	}
+
+	// These leave the Pod exactly where it was, so the wait is worth continuing.
+	for _, err := range []error{
+		apierrors.NewInternalError(errors.New("boom")),
+		apierrors.NewServiceUnavailable("apiserver restarting"),
+		errors.New("dial tcp: i/o timeout"),
+	} {
+		assert.True(t, transientGetError(err), err)
 	}
 }
 

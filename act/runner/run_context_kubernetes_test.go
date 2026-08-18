@@ -4,14 +4,17 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
 	"time"
 
+	"gitea.com/gitea/runner/act/common"
 	"gitea.com/gitea/runner/act/container/kubernetes"
 
 	"gitea.dev/actionslib/pkg/model"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -145,6 +148,30 @@ func TestImagePullPolicy(t *testing.T) {
 	require.Equal(t, "IfNotPresent", imagePullPolicy("IfNotPresent", true), "an explicit policy wins over force_pull")
 	require.Equal(t, "Always", imagePullPolicy("", true), "there is no pull step to force here, so it becomes a pull policy")
 	require.Empty(t, imagePullPolicy("", false), "unset leaves the kubelet its own default")
+}
+
+// The runner's own container.options is the one ignored setting no job declares, so nothing
+// in the job's own YAML would ever hint that it stopped applying.
+func TestWarnUnsupportedJobContainerCoversTheRunnersOwnOptions(t *testing.T) {
+	warnings := func(t *testing.T, options string) string {
+		t.Helper()
+
+		rc := createIfTestRunContext(map[string]*model.Job{
+			"job1": createJob(t, `runs-on: ubuntu-latest`, ""),
+		})
+		rc.Config.ContainerOptions = options
+
+		buf := &bytes.Buffer{}
+		logger := log.New()
+		logger.SetOutput(buf)
+		logger.SetLevel(log.WarnLevel)
+		rc.warnUnsupportedJobContainer(common.WithLogger(context.Background(), logger.WithField("job", "j1")))
+
+		return buf.String()
+	}
+
+	require.Contains(t, warnings(t, "--cpus 2"), "container.options")
+	require.Empty(t, warnings(t, ""), "a job that drops nothing must not be warned at")
 }
 
 func TestStartPodEnvironmentRefusesCredentials(t *testing.T) {

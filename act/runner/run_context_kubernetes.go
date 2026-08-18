@@ -222,11 +222,19 @@ func (rc *RunContext) checkUnsupportedCredentials() error {
 // warnUnsupportedJobContainer says what the Pod spec has no place for, rather than leaving a
 // job to fail later for reasons that look nothing like the setting that was ignored.
 func (rc *RunContext) warnUnsupportedJobContainer(ctx context.Context) {
+	logger := common.Logger(ctx)
+
+	// The runner's own container.options reaches every job on the docker backend, so a label
+	// moved to kubernetes drops it for the jobs that declare no container: of their own —
+	// which is most of them, and the case the checks below never see.
+	if rc.Config.ContainerOptions != "" {
+		logger.Warnf("The runner's container.options are not supported by the kubernetes backend and are ignored; use the kubernetes: section instead.")
+	}
+
 	c := rc.Run.Job().Container()
 	if c == nil {
 		return
 	}
-	logger := common.Logger(ctx)
 	if c.Options != "" {
 		logger.Warnf("The job container's options are not supported by the kubernetes backend and are ignored; use the kubernetes: section instead.")
 	}

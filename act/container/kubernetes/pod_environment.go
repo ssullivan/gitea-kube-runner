@@ -207,18 +207,16 @@ func (e *PodEnvironment) Inspect(ctx context.Context) (*container.Info, error) {
 // podInfo maps one container's status within a Pod onto container.Info. Kubernetes has
 // no docker-style HEALTHCHECK, so readiness is the closest signal there is: a ready
 // container reports healthy, one still starting reports starting.
+//
+// The state is the named container's alone, never the Pod's: a sidecar still being created
+// would otherwise report running off a Pod that is, and so would a name matching nothing.
 func podInfo(pod *corev1.Pod, containerName string) *container.Info {
 	info := &container.Info{
 		ID:     string(pod.UID),
-		State:  podState(pod.Status.Phase),
+		State:  "created",
 		Health: container.HealthNone,
 		Ports:  map[string]string{}, // never null, it is read in the expression context
 	}
-
-	// Seeded from the Pod so an unstarted one reads as created, then corrected below. A
-	// container with no status of its own must not inherit the Pod's: a sidecar still being
-	// created would otherwise report running, and so would a name that matches nothing.
-	info.State = "created"
 
 	for _, status := range pod.Status.ContainerStatuses {
 		if status.Name != containerName {
@@ -256,17 +254,6 @@ func hasReadinessProbe(pod *corev1.Pod, containerName string) bool {
 		}
 	}
 	return false
-}
-
-func podState(phase corev1.PodPhase) string {
-	switch phase {
-	case corev1.PodRunning:
-		return container.StateRunning
-	case corev1.PodSucceeded, corev1.PodFailed:
-		return "exited"
-	default:
-		return "created"
-	}
 }
 
 func (e *PodEnvironment) DumpLogs(ctx context.Context) error {
