@@ -25,6 +25,7 @@ cluster="${K8S_TEST_CLUSTER:-gitea-runner-test}"
 namespace="${K8S_TEST_NAMESPACE:-gitea-runner-test}"
 preload="${K8S_TEST_PRELOAD:-alpine:latest}"
 created_cluster=""
+kubeconfig_path=""
 
 if [ -n "${KUBECONFIG:-}" ]; then
   echo "==> Using the cluster in KUBECONFIG=$KUBECONFIG"
@@ -46,6 +47,10 @@ cleanup() {
   if [ -n "$created_cluster" ]; then
     echo "==> Deleting kind cluster $cluster"
     kind delete cluster --name "$cluster" >/dev/null 2>&1 || true
+  fi
+  # Written whenever this script makes its own, cluster created here or reused, so it is
+  # removed on both paths rather than left in /tmp by every local run.
+  if [ -n "$kubeconfig_path" ]; then
     rm -f "$kubeconfig_path"
   fi
 }

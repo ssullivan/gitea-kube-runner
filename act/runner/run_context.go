@@ -27,6 +27,7 @@ import (
 
 	"gitea.com/gitea/runner/act/common"
 	"gitea.com/gitea/runner/act/container"
+	"gitea.com/gitea/runner/act/container/kubernetes"
 	"gitea.com/gitea/runner/act/ghcontext"
 	"gitea.com/gitea/runner/internal/pkg/lock"
 
@@ -984,6 +985,13 @@ func (b execBackend) String() string {
 }
 
 func (rc *RunContext) execBackend(ctx context.Context) execBackend {
+	// Once the job is running, what it is running in settles the question. A composite
+	// action gets a RunContext whose synthetic job has no runs-on, so re-deriving from
+	// labels there answered docker and let the guards below it through.
+	if _, ok := rc.JobContainer.(*kubernetes.PodEnvironment); ok {
+		return backendKubernetes
+	}
+
 	platform := rc.runsOnImage(ctx)
 	// A kubernetes label has no docker daemon to fall back to, so an explicit
 	// container: image only changes the Pod's image (see platformImage). A host

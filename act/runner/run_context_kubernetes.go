@@ -58,6 +58,7 @@ func (rc *RunContext) startPodEnvironment() common.Executor {
 		if err := rc.checkUnsupportedCredentials(); err != nil {
 			return err
 		}
+		rc.warnUnsupportedJobContainer(ctx)
 
 		services := rc.podServiceInputs(ctx)
 
@@ -124,13 +125,9 @@ func (rc *RunContext) startPodEnvironment() common.Executor {
 
 		rc.cleanUpJobContainer = pod.Remove()
 
-		defer printStartJobContainerGroup(ctx, image, name, "pod", backendKubernetes)()
+		defer printStartJobContainerGroup(ctx, image, kubernetes.PodName(name), "pod", backendKubernetes)()
 
 		return common.NewPipelineExecutor(
-			// Pod names are deterministic, so one left behind by a killed runner — an
-			// unowned Pod, which is every out-of-cluster and cross-namespace deployment —
-			// would fail the retry with AlreadyExists rather than being replaced.
-			rc.stopJobContainer(),
 			pod.Create(rc.Config.ContainerCapAdd, rc.Config.ContainerCapDrop),
 			pod.Start(false),
 			// The sidecar views exist so the service orchestration drives both backends;
@@ -220,6 +217,25 @@ func (rc *RunContext) checkUnsupportedCredentials() error {
 		}
 	}
 	return nil
+}
+
+// warnUnsupportedJobContainer says what the Pod spec has no place for, rather than leaving a
+// job to fail later for reasons that look nothing like the setting that was ignored.
+func (rc *RunContext) warnUnsupportedJobContainer(ctx context.Context) {
+	c := rc.Run.Job().Container()
+	if c == nil {
+		return
+	}
+	logger := common.Logger(ctx)
+	if c.Options != "" {
+		logger.Warnf("The job container's options are not supported by the kubernetes backend and are ignored; use the kubernetes: section instead.")
+	}
+	if len(c.Volumes) > 0 {
+		logger.Warnf("The job container declares volumes, which the kubernetes backend does not support; they are ignored.")
+	}
+	if len(c.Ports) > 0 {
+		logger.Warnf("The job container declares ports, which need no publishing in a Pod; they are ignored.")
+	}
 }
 
 // imagePullPolicy lets force_pull ask for a re-pull the way it does for docker, since

@@ -57,7 +57,7 @@ func (e *PodEnvironment) waitForRunning(ctx context.Context, timeout time.Durati
 		if reason := terminalWaitingReason(pod); reason != "" {
 			return fmt.Errorf("kubernetes: pod %s cannot start: %s", e.podName, reason)
 		}
-		if reason := schedulingReason(pod); reason != "" && reason != lastReason {
+		if reason := schedulingReason(pod); reason != "" {
 			lastReason = reason
 		}
 
@@ -69,44 +69,6 @@ func (e *PodEnvironment) waitForRunning(ctx context.Context, timeout time.Durati
 				detail = string(pod.Status.Phase)
 			}
 			return fmt.Errorf("kubernetes: timed out waiting for pod %s to start: %s", e.podName, detail)
-		}
-	}
-}
-
-// waitForContainerReady blocks until one container in the Pod reports ready, which is
-// the closest equivalent to a docker healthcheck passing for a service container.
-func (e *PodEnvironment) waitForContainerReady(ctx context.Context, name string, timeout time.Duration) error {
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
-
-	for {
-		pod, err := e.client.Clientset.CoreV1().Pods(e.namespace).Get(ctx, e.podName, metav1.GetOptions{})
-		if err != nil {
-			return fmt.Errorf("kubernetes: get pod %s: %w", e.podName, err)
-		}
-
-		for _, status := range pod.Status.ContainerStatuses {
-			if status.Name != name {
-				continue
-			}
-			if status.Ready {
-				return nil
-			}
-			if status.State.Terminated != nil {
-				return fmt.Errorf("kubernetes: service container %s exited with code %d", name, status.State.Terminated.ExitCode)
-			}
-			if reason := waitingReason(status); isTerminalWaitingReason(reason) {
-				return fmt.Errorf("kubernetes: service container %s cannot start: %s", name, reason)
-			}
-		}
-
-		select {
-		case <-time.After(pollInterval):
-		case <-ctx.Done():
-			return fmt.Errorf("kubernetes: timed out waiting for service container %s to be ready", name)
 		}
 	}
 }
@@ -144,8 +106,7 @@ func waitingReason(status corev1.ContainerStatus) string {
 
 func isTerminalWaitingReason(reason string) bool {
 	switch {
-	case strings.HasPrefix(reason, "ErrImagePull"),
-		strings.HasPrefix(reason, "ImagePullBackOff"),
+	case strings.HasPrefix(reason, "ImagePullBackOff"),
 		strings.HasPrefix(reason, "InvalidImageName"),
 		strings.HasPrefix(reason, "CreateContainerConfigError"),
 		strings.HasPrefix(reason, "CreateContainerError"):

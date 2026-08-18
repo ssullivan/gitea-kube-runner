@@ -257,12 +257,18 @@ func waitForKubernetes(ctx context.Context, cfg *config.Config) error {
 		KubeconfigContext: cfg.Kubernetes.KubeconfigContext,
 	}
 
+	// Built once: a retry loop that rebuilt it would re-read the kubeconfig and a fresh TLS
+	// transport every second, and reuse the connection never.
+	cli, err := kubernetes.NewClient(kubeCfg)
+	if err != nil {
+		return err
+	}
+
 	if timeout := cfg.Kubernetes.ConnectTimeout; timeout > 0 {
 		tctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		for {
-			err := envcheck.CheckIfKubernetesReachable(tctx, kubeCfg)
-			if err == nil {
+			if err = cli.Ping(tctx); err == nil {
 				break
 			}
 			log.Errorf("Kubernetes connection failed: %s", err.Error())
@@ -275,9 +281,13 @@ func waitForKubernetes(ctx context.Context, cfg *config.Config) error {
 				break
 			}
 		}
+		if err == nil {
+			log.Infof("Kubernetes is ready")
+			return nil
+		}
 	}
 
-	if err := envcheck.CheckIfKubernetesReachable(ctx, kubeCfg); err != nil {
+	if err := cli.Ping(ctx); err != nil {
 		return err
 	}
 	log.Infof("Kubernetes is ready")

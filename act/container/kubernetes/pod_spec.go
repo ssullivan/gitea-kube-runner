@@ -93,7 +93,9 @@ type ServiceInput struct {
 	// constrains far more tightly. Assigned by AssignServiceContainerNames.
 	ContainerName string
 
-	Image      string
+	Image string
+	// Entrypoint has no workflow source: the docker backend does not read a service's
+	// entrypoint either, so nothing populates this and sidecars keep their image's own.
 	Entrypoint []string
 	Cmd        []string
 	Env        []string

@@ -135,10 +135,12 @@ func resolveNamespace(configured, discovered string) string {
 
 // Ping verifies the cluster is reachable and the credentials are accepted.
 func (c *Client) Ping(ctx context.Context) error {
-	// Discovery is the cheapest authenticated call that does not need any RBAC of
-	// its own, so it checks reachability without masking a missing Pod permission.
-	if _, err := c.Clientset.Discovery().ServerVersion(); err != nil {
+	// /version is the cheapest authenticated call that needs no RBAC of its own, so it
+	// checks reachability without masking a missing Pod permission. Issued through the REST
+	// client rather than Discovery, which takes no context: connect_timeout has to bound
+	// this, and an unreachable address otherwise blocks for the OS connect timeout.
+	if err := c.Clientset.Discovery().RESTClient().Get().AbsPath("/version").Do(ctx).Error(); err != nil {
 		return fmt.Errorf("cannot reach the kubernetes cluster: %w", err)
 	}
-	return ctx.Err()
+	return nil
 }

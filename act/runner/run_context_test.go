@@ -17,6 +17,7 @@ import (
 
 	"gitea.com/gitea/runner/act/common"
 	"gitea.com/gitea/runner/act/container"
+	"gitea.com/gitea/runner/act/container/kubernetes"
 
 	"gitea.dev/actionslib/pkg/exprparser"
 	"gitea.dev/actionslib/pkg/model"
@@ -829,6 +830,17 @@ func TestRunContextExecBackend(t *testing.T) {
 			require.Equal(t, tt.want == backendHost, rc.IsHostEnv(context.Background()))
 		})
 	}
+}
+
+// A composite action's RunContext has a synthetic job with no runs-on, so the backend can
+// only be read from what the job is already running in. Getting docker here let the
+// `uses: docker://` and `runs.using: docker` guards through for steps inside a composite.
+func TestExecBackendFollowsTheJobContainer(t *testing.T) {
+	rc := createIfTestRunContext(map[string]*model.Job{"job1": createJob(t, "name: no runs-on", "")})
+	require.Equal(t, backendDocker, rc.execBackend(context.Background()))
+
+	rc.JobContainer = &kubernetes.PodEnvironment{}
+	require.Equal(t, backendKubernetes, rc.execBackend(context.Background()))
 }
 
 func TestExecBackendString(t *testing.T) {

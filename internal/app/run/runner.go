@@ -745,8 +745,8 @@ func warnIgnoredCacheSecret(cfg *config.Config) {
 	log.Warnf("%s is set but cache.external_server is not; the built-in cache server does not use a shared secret, so the value is ignored", key)
 }
 
-// kubernetesConfig maps the runner's kubernetes settings onto the act runner's, which
-// keeps its own copy so the vendored act tree needs no kubernetes SDK.
+// kubernetesConfig maps the runner's kubernetes settings, as the YAML declares them, onto
+// the act runner's, which holds the backend's own types.
 func kubernetesConfig(cfg config.Kubernetes) runner.KubernetesConfig {
 	tolerations := make([]kubernetes.Toleration, 0, len(cfg.Tolerations))
 	for _, t := range cfg.Tolerations {

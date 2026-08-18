@@ -102,10 +102,13 @@ func TestPodInfoScopesToNamedContainer(t *testing.T) {
 func TestIsTerminalWaitingReason(t *testing.T) {
 	// These never resolve on their own, so the job fails with the cluster's wording
 	// instead of waiting out the scheduling timeout.
-	for _, reason := range []string{"ErrImagePull", "ImagePullBackOff", "InvalidImageName", "CreateContainerConfigError"} {
+	for _, reason := range []string{"ImagePullBackOff", "InvalidImageName", "CreateContainerConfigError"} {
 		assert.True(t, isTerminalWaitingReason(reason), reason)
 	}
-	for _, reason := range []string{"", "ContainerCreating", "PodInitializing"} {
+	// ErrImagePull is the kubelet's first pull failure, which it then retries: a registry
+	// blip would fail the job outright if this were treated as final. ImagePullBackOff, set
+	// once it has given up on the immediate retry, is the terminal one.
+	for _, reason := range []string{"", "ErrImagePull", "ContainerCreating", "PodInitializing"} {
 		assert.False(t, isTerminalWaitingReason(reason), reason)
 	}
 }

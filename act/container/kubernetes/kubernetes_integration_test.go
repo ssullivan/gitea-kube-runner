@@ -211,11 +211,18 @@ func TestKubernetesServiceSidecarReachableOnLocalhost(t *testing.T) {
 
 	assert.Contains(t, out.String(), "hi from the sidecar")
 
-	// The sidecar's own status and logs are readable through its view.
-	view := NewSidecarView(env, "web")
+	// The sidecar's own status is readable through its view, addressed by the container name
+	// the Pod was actually built with rather than the service id it came from.
+	view := NewSidecarView(env, env.input.Services[0].ContainerName)
 	info, err := view.Inspect(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, container.StateRunning, info.State)
+
+	// A name no container has must not read as running off the Pod's own phase, or every
+	// assertion made through a sidecar view passes whatever the sidecar is doing.
+	missing, err := NewSidecarView(env, "no-such-container").Inspect(ctx)
+	require.NoError(t, err)
+	assert.NotEqual(t, container.StateRunning, missing.State)
 }
 
 // TestKubernetesOwnedPodIsCollectedWithItsOwner proves the mechanism the runner relies on to

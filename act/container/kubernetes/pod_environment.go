@@ -9,6 +9,7 @@ import (
 	"io"
 	"runtime"
 	"strings"
+	"time"
 
 	"gitea.com/gitea/runner/act/common"
 	"gitea.com/gitea/runner/act/container"
@@ -98,13 +99,23 @@ func NewPodEnvironment(client *Client, input *PodInput) *PodEnvironment {
 // steps can be exec'd into it afterwards, the same shape as the docker backend's
 // create-then-exec model.
 func (e *PodEnvironment) Create(capAdd, capDrop []string) common.Executor {
-	return func(ctx context.Context) error {
+	return common.Executor(func(ctx context.Context) error {
 		pod, err := BuildPod(e.input, capAdd, capDrop)
 		if err != nil {
 			return err
 		}
 
-		created, err := e.client.Clientset.CoreV1().Pods(e.namespace).Create(ctx, pod, metav1.CreateOptions{})
+		pods := e.client.Clientset.CoreV1().Pods(e.namespace)
+		created, err := pods.Create(ctx, pod, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			// Pod names are deterministic, so a runner killed mid-job leaves one in the way of
+			// its own retry. Deleting it gracefully is not enough: the API server returns while
+			// the Pod is still Terminating, and creating over that name fails again.
+			if err = e.removeNow(ctx); err != nil {
+				return err
+			}
+			created, err = pods.Create(ctx, pod, metav1.CreateOptions{})
+		}
 		if err != nil {
 			return fmt.Errorf("kubernetes: create pod %s: %w", e.podName, err)
 		}
@@ -113,6 +124,29 @@ func (e *PodEnvironment) Create(capAdd, capDrop []string) common.Executor {
 		common.Logger(ctx).Debugf("Created pod %s/%s", e.namespace, e.podName)
 
 		return nil
+	}).IfNot(common.Dryrun)
+}
+
+// removeNow deletes the Pod without a grace period and waits for it to be gone, which is
+// what makes the name free to use again.
+func (e *PodEnvironment) removeNow(ctx context.Context) error {
+	pods := e.client.Clientset.CoreV1().Pods(e.namespace)
+	grace := int64(0)
+	if err := pods.Delete(ctx, e.podName, metav1.DeleteOptions{GracePeriodSeconds: &grace}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("kubernetes: replace pod %s: %w", e.podName, err)
+	}
+
+	for {
+		if _, err := pods.Get(ctx, e.podName, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("kubernetes: replace pod %s: %w", e.podName, err)
+		}
+		select {
+		case <-time.After(pollInterval):
+		case <-ctx.Done():
+			return fmt.Errorf("kubernetes: pod %s was still terminating: %w", e.podName, ctx.Err())
+		}
 	}
 }
 
@@ -122,25 +156,13 @@ func (e *PodEnvironment) ConnectToNetwork(_ string) common.Executor {
 	return func(_ context.Context) error { return nil }
 }
 
-// Start waits for the job container to be running, and for each service sidecar to
-// report ready, which stands in for the docker healthcheck this backend has no
-// equivalent of.
+// Start waits for the job container to be running. Service sidecars are waited on by the
+// shared service orchestration instead, which reports an unstarted one and dumps its logs
+// before giving up — waiting for them here too pre-empted that, and did it serially.
 func (e *PodEnvironment) Start(_ bool) common.Executor {
-	return func(ctx context.Context) error {
-		if err := e.waitForRunning(ctx, e.input.SchedulingTimeout); err != nil {
-			return err
-		}
-
-		if timeout := e.input.ServiceReadyTimeout; timeout >= 0 {
-			for _, service := range e.input.Services {
-				if err := e.waitForContainerReady(ctx, service.ContainerName, timeout); err != nil {
-					return err
-				}
-			}
-		}
-
-		return nil
-	}
+	return common.Executor(func(ctx context.Context) error {
+		return e.waitForRunning(ctx, e.input.SchedulingTimeout)
+	}).IfNot(common.Dryrun)
 }
 
 // Pull is a no-op: the kubelet pulls images when it starts the Pod. force_pull is
@@ -151,9 +173,9 @@ func (e *PodEnvironment) Pull(_ bool) common.Executor {
 }
 
 func (e *PodEnvironment) Copy(destPath string, files ...*container.FileEntry) common.Executor {
-	return func(ctx context.Context) error {
+	return common.Executor(func(ctx context.Context) error {
 		return e.copyContent(ctx, destPath, files...)
-	}
+	}).IfNot(common.Dryrun)
 }
 
 func (e *PodEnvironment) CopyTarStream(ctx context.Context, destPath string, tarStream io.Reader) error {
@@ -161,9 +183,9 @@ func (e *PodEnvironment) CopyTarStream(ctx context.Context, destPath string, tar
 }
 
 func (e *PodEnvironment) CopyDir(destPath, srcPath string, useGitIgnore bool) common.Executor {
-	return func(ctx context.Context) error {
+	return common.Executor(func(ctx context.Context) error {
 		return e.copyDir(ctx, destPath, srcPath, useGitIgnore)
-	}
+	}).IfNot(common.Dryrun)
 }
 
 func (e *PodEnvironment) GetContainerArchive(ctx context.Context, srcPath string) (io.ReadCloser, error) {
@@ -192,6 +214,11 @@ func podInfo(pod *corev1.Pod, containerName string) *container.Info {
 		Health: container.HealthNone,
 		Ports:  map[string]string{}, // never null, it is read in the expression context
 	}
+
+	// Seeded from the Pod so an unstarted one reads as created, then corrected below. A
+	// container with no status of its own must not inherit the Pod's: a sidecar still being
+	// created would otherwise report running, and so would a name that matches nothing.
+	info.State = "created"
 
 	for _, status := range pod.Status.ContainerStatuses {
 		if status.Name != containerName {
@@ -306,7 +333,7 @@ func (e *PodEnvironment) UpdateFromImageEnv(env *map[string]string) common.Execu
 // Remove deletes the job Pod, taking its service sidecars and the workspace emptyDir
 // with it.
 func (e *PodEnvironment) Remove() common.Executor {
-	return func(ctx context.Context) error {
+	return common.Executor(func(ctx context.Context) error {
 		if e.podName == "" {
 			return nil
 		}
@@ -326,7 +353,7 @@ func (e *PodEnvironment) Remove() common.Executor {
 		common.Logger(ctx).Debugf("Removed pod %s/%s", e.namespace, e.podName)
 
 		return nil
-	}
+	}).IfNot(common.Dryrun)
 }
 
 // Close is a no-op: the client holds no per-job resource to release, and the Pod is
