@@ -65,6 +65,10 @@ type RunContext struct {
 	Parent              *RunContext
 	Masks               []string
 	cleanUpJobContainer common.Executor
+	// serviceReadyTimeout is set by a backend that resolves its own from its own config
+	// section, so the wait around the backend agrees with the one inside it. Zero means the
+	// docker setting applies, as it always did.
+	serviceReadyTimeout time.Duration
 	caller              *caller // job calling this RunContext (reusable workflows)
 	// summaryFileInitialized tracks which per-step summary files (workflow/step-summary-N.md)
 	// have already been created on the JobContainer. The runner sets up file-command files
@@ -780,6 +784,9 @@ func (rc *RunContext) waitForServiceContainers() common.Executor {
 		}
 
 		timeout := rc.Config.ServiceReadyTimeout
+		if rc.serviceReadyTimeout != 0 { // a backend that resolves its own, see startPodEnvironment
+			timeout = rc.serviceReadyTimeout
+		}
 		switch {
 		case timeout < 0:
 			// disabled, but still describe the containers for `job.services`

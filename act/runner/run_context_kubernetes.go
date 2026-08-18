@@ -55,6 +55,10 @@ func (rc *RunContext) startPodEnvironment() common.Executor {
 
 		kcfg := rc.Config.Kubernetes
 		maxLifetime := rc.Config.ContainerMaxLifetime
+		// Resolved once and shared with the orchestration around the backend, so
+		// kubernetes.service_ready_timeout governs both waits rather than only the inner one.
+		readyTimeout := serviceReadyTimeout(kcfg, rc.Config.ServiceReadyTimeout)
+		rc.serviceReadyTimeout = readyTimeout
 		input := &kubernetes.PodInput{
 			Name:  name,
 			Image: image,
@@ -87,7 +91,7 @@ func (rc *RunContext) startPodEnvironment() common.Executor {
 			Privileged:             rc.Config.Privileged,
 			TerminationGracePeriod: kcfg.TerminationGracePeriod,
 			SchedulingTimeout:      kcfg.SchedulingTimeout,
-			ServiceReadyTimeout:    serviceReadyTimeout(kcfg, rc.Config.ServiceReadyTimeout),
+			ServiceReadyTimeout:    readyTimeout,
 		}
 
 		pod, err := newPodEnvironment(kubernetes.Config{
@@ -116,8 +120,17 @@ func (rc *RunContext) startPodEnvironment() common.Executor {
 		defer printStartJobContainerGroup(ctx, image, name, "pod", backendKubernetes)()
 
 		return common.NewPipelineExecutor(
+			// Pod names are deterministic, so one left behind by a killed runner — an
+			// unowned Pod, which is every out-of-cluster and cross-namespace deployment —
+			// would fail the retry with AlreadyExists rather than being replaced.
+			rc.stopJobContainer(),
 			pod.Create(rc.Config.ContainerCapAdd, rc.Config.ContainerCapDrop),
 			pod.Start(false),
+			// The sidecar views exist so the service orchestration drives both backends;
+			// skipping these left svc.info unset, so `job.services.*` resolved to nothing
+			// and a sidecar that died on startup never had its logs read.
+			rc.reportUnstartedServices(),
+			rc.waitForServiceContainers(),
 			rc.captureJobContainerInfo(),
 			pod.Copy(pod.GetActPath()+"/", &container.FileEntry{
 				Name: "workflow/event.json",

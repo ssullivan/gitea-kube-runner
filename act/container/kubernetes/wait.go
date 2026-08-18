@@ -36,7 +36,18 @@ func (e *PodEnvironment) waitForRunning(ctx context.Context, timeout time.Durati
 
 		switch pod.Status.Phase {
 		case corev1.PodRunning, corev1.PodSucceeded:
-			return nil
+			// The phase alone is not enough: a sidecar keeps a Pod Running after the job
+			// container has exited, and steps exec'd into a dead container fail with a raw
+			// "container not running" instead of the reason it is not.
+			switch state := jobContainerState(pod); {
+			case state == nil:
+				// status not published yet, keep waiting
+			case state.Terminated != nil:
+				return fmt.Errorf("kubernetes: pod %s: the job container exited before any step ran: %s",
+					e.podName, podFailureMessage(pod))
+			case state.Running != nil:
+				return nil
+			}
 		case corev1.PodFailed:
 			return fmt.Errorf("kubernetes: pod %s failed to start: %s", e.podName, podFailureMessage(pod))
 		}
@@ -155,4 +166,15 @@ func schedulingReason(pod *corev1.Pod) string {
 		}
 	}
 	return ""
+}
+
+// jobContainerState is the job container's own state within the Pod, or nil before the
+// kubelet has published one.
+func jobContainerState(pod *corev1.Pod) *corev1.ContainerState {
+	for i, status := range pod.Status.ContainerStatuses {
+		if status.Name == JobContainerName {
+			return &pod.Status.ContainerStatuses[i].State
+		}
+	}
+	return nil
 }
