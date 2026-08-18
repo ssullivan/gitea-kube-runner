@@ -1,5 +1,20 @@
 # Gitea Runner
 
+> **A fork of [gitea/runner](https://gitea.com/gitea/runner) that adds a Kubernetes execution backend.**
+>
+> It is a drop-in replacement for the upstream runner. The CLI, the configuration file, the
+> registration flow and the existing `docker` and `host` backends are unchanged, and the new
+> configuration is additive, so an existing runner can be swapped for this binary without
+> editing its config or re-registering.
+>
+> What it adds is a third execution backend that runs each job as its own Kubernetes Pod,
+> opted into per job by a `kubernetes://` label — no Docker daemon, no privileged
+> Docker-in-Docker sidecar. See [docs/kubernetes-backend.md](docs/kubernetes-backend.md) for
+> its configuration, cluster permissions and limitations.
+>
+> The pre-built binaries linked below are upstream's and do **not** include this backend;
+> build from source to get it.
+
 ## Installation
 
 ### Prerequisites
@@ -175,10 +190,10 @@ A label is written as:
 | Part | Meaning |
 | --- | --- |
 | `name` | The name a workflow refers to in `runs-on`, e.g. `ubuntu-latest`. |
-| `schema` | Either `docker` or `host`. Defaults to `host` when omitted. |
-| `args` | Only used by the `docker` schema: the image to run the job in. |
+| `schema` | One of `docker`, `host`, or `kubernetes`. Defaults to `host` when omitted. |
+| `args` | Used by the `docker` and `kubernetes` schemas: the image to run the job in. |
 
-Two schemas are supported:
+Three schemas are supported:
 
 - **`docker://<image>`** — the job runs inside a container created from `<image>`:
 
@@ -192,6 +207,14 @@ Two schemas are supported:
   macos:host
   ```
 
+- **`kubernetes://<image>`** — the job runs in its own Kubernetes Pod created from `<image>`:
+
+  ```text
+  ubuntu-latest:kubernetes://docker.gitea.com/runner-images:ubuntu-latest
+  ```
+
+  See [docs/kubernetes-backend.md](docs/kubernetes-backend.md) for the required configuration, cluster permissions, and limitations.
+
 So with the labels
 
 ```text
@@ -200,7 +223,7 @@ ubuntu-latest:docker://docker.gitea.com/runner-images:ubuntu-latest,macos:host
 
 a workflow with `runs-on: ubuntu-latest` is executed in the `runner-images:ubuntu-latest` container, and one with `runs-on: macos` is executed directly on the host.
 
-Names may themselves contain a colon (for example `pool:e57e18d4-10d4-406f-93bf-60f127221bdd`); only `host` and `docker` are treated as schemas.
+Names may themselves contain a colon (for example `pool:e57e18d4-10d4-406f-93bf-60f127221bdd`); only `host`, `docker`, and `kubernetes` are treated as schemas.
 
 If a job's `runs-on` matches none of the runner's labels, the job still runs, in the default `docker.gitea.com/runner-images:ubuntu-latest` image. Images maintained for this purpose are listed at [gitea/runner-images](https://gitea.com/gitea/runner-images).
 
@@ -219,6 +242,8 @@ The `daemon` command also accepts `--labels` (which defaults to the `GITEA_RUNNE
 Whenever the resulting labels differ from the ones in the registration file, they are written back to it and re-declared to the Gitea instance on startup.
 
 > **Note:** A runner that only exposes `host` labels still needs access to a Docker daemon (e.g. a mounted `/var/run/docker.sock`) whenever a job uses a `docker://` action or a service container. `host` labels only change where the job's own steps run; container-based steps and actions are still executed with Docker.
+>
+> A job that sets `container:` is the same story, and the two schemas differ here. On a `host` label, an explicit `container:` image runs the **whole job in Docker** rather than on the host. On a `kubernetes://` label it does not: there is no daemon to fall back to, so `container:` only changes the image the job's Pod is created from. Every job's log names the backend that ran it, on the `backend:` line of its "Starting job container" group.
 
 #### Service containers
 

@@ -171,6 +171,10 @@ coverage-report: ## turn coverage.txt from `make test` into .tmp/coverage.md
 test-dind: ## run the daemon-facing tests against the built dind image (TARGET=dind|dind-rootless)
 	@./scripts/test-dind.sh $(TARGET)
 
+.PHONY: test-k8s
+test-k8s: ## run the kubernetes backend tests against a kind cluster (or KUBECONFIG's)
+	@./scripts/test-k8s.sh
+
 .PHONY: install
 install: $(GOFILES) ## install the runner binary via `go install`
 	$(GO) install -v -tags '$(TAGS)' -ldflags '-s -w $(EXTLDFLAGS) $(LDFLAGS)'

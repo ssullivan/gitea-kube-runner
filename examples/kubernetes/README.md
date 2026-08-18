@@ -6,6 +6,8 @@ NOTE: `dind-docker.yaml` uses the native sidecar pattern (init container with `r
 
 NOTE: A helm chart for `gitea-runner` also exists for easier deployments https://gitea.com/gitea/helm-actions
 
+NOTE: These examples deploy **the runner itself** into Kubernetes; jobs still execute as Docker containers inside the dind sidecar. To instead have the runner create **one Pod per job** on the cluster, see [`examples/kubernetes-jobs`](../kubernetes-jobs) and [docs/kubernetes-backend.md](../../docs/kubernetes-backend.md). The two are independent and can be combined.
+
 Each example persists **two** things, and it is worth knowing which is which:
 
 - `/data` is the runner's working directory. It holds the `.runner` registration file and, optionally, the config file — so the runner re-attaches to the server instead of registering again.

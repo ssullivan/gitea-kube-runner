@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"gitea.com/gitea/runner/act/container/kubernetes"
 	"gitea.com/gitea/runner/internal/app/poll"
 	"gitea.com/gitea/runner/internal/app/run"
 	"gitea.com/gitea/runner/internal/pkg/client"
@@ -145,6 +146,12 @@ func runDaemon(ctx context.Context, daemArgs *daemonArgs, configFile *string) fu
 			}
 		}
 
+		if ls.RequireKubernetes() || cfg.Kubernetes.RequireKubernetes {
+			if err := waitForKubernetes(ctx, cfg); err != nil {
+				return err
+			}
+		}
+
 		if !slices.Equal(reg.Labels, ls.ToStrings()) {
 			reg.Labels = ls.ToStrings()
 			if err := config.SaveRegistration(cfg.Runner.File, reg); err != nil {
@@ -238,6 +245,44 @@ func runDaemon(ctx context.Context, daemArgs *daemonArgs, configFile *string) fu
 type daemonArgs struct {
 	Once   bool
 	Labels string
+}
+
+// waitForKubernetes blocks until the cluster job Pods are created on is reachable,
+// mirroring the docker readiness wait above, including its timeout semantics: a
+// connect_timeout of 0 checks once and fails rather than retrying forever.
+func waitForKubernetes(ctx context.Context, cfg *config.Config) error {
+	kubeCfg := kubernetes.Config{
+		Namespace:         cfg.Kubernetes.Namespace,
+		Kubeconfig:        cfg.Kubernetes.Kubeconfig,
+		KubeconfigContext: cfg.Kubernetes.KubeconfigContext,
+	}
+
+	if timeout := cfg.Kubernetes.ConnectTimeout; timeout > 0 {
+		tctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		for {
+			err := envcheck.CheckIfKubernetesReachable(tctx, kubeCfg)
+			if err == nil {
+				break
+			}
+			log.Errorf("Kubernetes connection failed: %s", err.Error())
+			select {
+			case <-time.After(time.Second):
+			case <-tctx.Done():
+				log.Infof("Kubernetes wait timeout of %s expired", timeout.String())
+			}
+			if tctx.Err() != nil {
+				break
+			}
+		}
+	}
+
+	if err := envcheck.CheckIfKubernetesReachable(ctx, kubeCfg); err != nil {
+		return err
+	}
+	log.Infof("Kubernetes is ready")
+
+	return nil
 }
 
 // resolveLabels picks the labels to run with: --labels/GITEA_RUNNER_LABELS > config > .runner.

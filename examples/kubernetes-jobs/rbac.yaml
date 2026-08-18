@@ -1,0 +1,56 @@
+# Least-privilege permissions for the Kubernetes execution backend, which creates one
+# Pod per job in the runner's own namespace, execs into it, streams its logs, and
+# deletes it when the job ends. See docs/kubernetes-backend.md.
+#
+# Bind this to whatever ServiceAccount the runner process itself runs as, then point
+# `kubernetes.namespace` at this namespace. `kubernetes.service_account_name` names the
+# ServiceAccount the *job Pods* run as, which needs no permissions of its own.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitea-runner
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitea-runner
+  namespace: gitea-runner
+---
+# The ServiceAccount job Pods run as. It is intentionally distinct from the runner's own
+# and holds no permissions, so a workflow cannot reach the Kubernetes API.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitea-runner-jobs
+  namespace: gitea-runner
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gitea-runner-jobs
+  namespace: gitea-runner
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gitea-runner-jobs
+  namespace: gitea-runner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: gitea-runner-jobs
+subjects:
+  - kind: ServiceAccount
+    name: gitea-runner
+    namespace: gitea-runner

@@ -522,6 +522,7 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 		ValidVolumes:                      r.cfg.Container.ValidVolumes,
 		InsecureSkipTLS:                   r.cfg.Runner.Insecure,
 		RunnerName:                        r.name,
+		Kubernetes:                        kubernetesConfig(r.cfg.Kubernetes),
 	}
 
 	rr, err := runner.New(runnerConfig)
@@ -741,4 +742,31 @@ func warnIgnoredCacheSecret(cfg *config.Config) {
 		key = "cache.external_secret_file"
 	}
 	log.Warnf("%s is set but cache.external_server is not; the built-in cache server does not use a shared secret, so the value is ignored", key)
+}
+
+// kubernetesConfig maps the runner's kubernetes settings onto the act runner's, which
+// keeps its own copy so the vendored act tree needs no kubernetes SDK.
+func kubernetesConfig(cfg config.Kubernetes) runner.KubernetesConfig {
+	tolerations := make([]runner.KubernetesToleration, 0, len(cfg.Tolerations))
+	for _, t := range cfg.Tolerations {
+		tolerations = append(tolerations, runner.KubernetesToleration(t))
+	}
+
+	return runner.KubernetesConfig{
+		Namespace:              cfg.Namespace,
+		Kubeconfig:             cfg.Kubeconfig,
+		KubeconfigContext:      cfg.KubeconfigContext,
+		ServiceAccountName:     cfg.ServiceAccountName,
+		ImagePullSecrets:       cfg.ImagePullSecrets,
+		ImagePullPolicy:        cfg.ImagePullPolicy,
+		PodLabels:              cfg.PodLabels,
+		PodAnnotations:         cfg.PodAnnotations,
+		NodeSelector:           cfg.NodeSelector,
+		Tolerations:            tolerations,
+		Resources:              runner.KubernetesResources(cfg.Resources),
+		SecurityContext:        runner.KubernetesSecurityContext(cfg.PodSecurityContext),
+		SchedulingTimeout:      cfg.SchedulingTimeout,
+		ServiceReadyTimeout:    cfg.ServiceReadyTimeout,
+		TerminationGracePeriod: cfg.TerminationGracePeriod,
+	}
 }

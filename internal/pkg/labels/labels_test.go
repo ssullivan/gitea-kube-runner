@@ -35,6 +35,15 @@ func TestParse(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			args: "ubuntu:kubernetes://node:18",
+			want: &Label{
+				Name:   "ubuntu",
+				Schema: "kubernetes",
+				Arg:    "//node:18",
+			},
+			wantErr: false,
+		},
+		{
 			args: "ubuntu",
 			want: &Label{
 				Name:   "ubuntu",
@@ -103,6 +112,7 @@ func TestRequireDocker(t *testing.T) {
 		{"empty", nil, false},
 		{"only host", []string{"ubuntu:host", "self-hosted"}, false},
 		{"has docker", []string{"ubuntu:host", "ubuntu:docker://node:18"}, true},
+		{"only kubernetes", []string{"ubuntu:kubernetes://node:18"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -111,9 +121,28 @@ func TestRequireDocker(t *testing.T) {
 	}
 }
 
+func TestRequireKubernetes(t *testing.T) {
+	tests := []struct {
+		name string
+		strs []string
+		want bool
+	}{
+		{"empty", nil, false},
+		{"only host", []string{"ubuntu:host", "self-hosted"}, false},
+		{"only docker", []string{"ubuntu:docker://node:18"}, false},
+		{"has kubernetes", []string{"ubuntu:host", "ubuntu:kubernetes://node:18"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, mustParse(t, tt.strs...).RequireKubernetes())
+		})
+	}
+}
+
 func TestPickPlatform(t *testing.T) {
 	ls := mustParse(t,
 		"ubuntu:docker://node:18",
+		"k8s:kubernetes://node:18",
 		"self-hosted:host",
 	)
 
@@ -122,7 +151,8 @@ func TestPickPlatform(t *testing.T) {
 		runsOn []string
 		want   string
 	}{
-		{"docker strips leading slashes", []string{"ubuntu"}, "node:18"},
+		{"docker keeps a scheme-prefixed image", []string{"ubuntu"}, "docker://node:18"},
+		{"kubernetes keeps a scheme-prefixed image", []string{"k8s"}, "kubernetes://node:18"},
 		{"host maps to self-hosted marker", []string{"self-hosted"}, "-self-hosted"},
 		{"first match wins", []string{"self-hosted", "ubuntu"}, "-self-hosted"},
 		{"unknown falls back to default", []string{"windows"}, "docker.gitea.com/runner-images:ubuntu-latest"},

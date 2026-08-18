@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"gitea.com/gitea/runner/act/runner"
 	clientmocks "gitea.com/gitea/runner/internal/pkg/client/mocks"
@@ -179,4 +180,48 @@ func TestNewRunnerNormalizesTheExternalCacheServer(t *testing.T) {
 	assert.Equal(t, "https://gitea.example", r.envs["ACTIONS_RESULTS_URL"])
 	assert.Empty(t, r.envs[runner.CacheServiceV2Env])
 	assert.True(t, r.patchToolkit())
+}
+
+// TestKubernetesConfigMapsEveryField guards the mapping rather than any one value: a field
+// added to config.Kubernetes but never mapped is invisible, which is how
+// kubernetes.service_ready_timeout stayed dead config until an end-to-end run.
+func TestKubernetesConfigMapsEveryField(t *testing.T) {
+	runAsUser := int64(1000)
+	cfg := config.Kubernetes{
+		Namespace:              "ci",
+		Kubeconfig:             "/etc/kubeconfig",
+		KubeconfigContext:      "prod",
+		ServiceAccountName:     "runner-jobs",
+		ImagePullSecrets:       []string{"regcred"},
+		ImagePullPolicy:        "IfNotPresent",
+		PodLabels:              map[string]string{"team": "ci"},
+		PodAnnotations:         map[string]string{"owner": "platform"},
+		NodeSelector:           map[string]string{"kubernetes.io/arch": "amd64"},
+		Tolerations:            []config.Toleration{{Key: "ci", Operator: "Equal", Value: "true", Effect: "NoSchedule"}},
+		Resources:              config.PodResources{RequestsCPU: "500m", LimitsMemory: "2Gi"},
+		PodSecurityContext:     config.PodSecurityContext{RunAsUser: &runAsUser},
+		SchedulingTimeout:      7 * time.Minute,
+		ServiceReadyTimeout:    45 * time.Second,
+		TerminationGracePeriod: 20 * time.Second,
+	}
+
+	got := kubernetesConfig(cfg)
+
+	assert.Equal(t, runner.KubernetesConfig{
+		Namespace:              "ci",
+		Kubeconfig:             "/etc/kubeconfig",
+		KubeconfigContext:      "prod",
+		ServiceAccountName:     "runner-jobs",
+		ImagePullSecrets:       []string{"regcred"},
+		ImagePullPolicy:        "IfNotPresent",
+		PodLabels:              map[string]string{"team": "ci"},
+		PodAnnotations:         map[string]string{"owner": "platform"},
+		NodeSelector:           map[string]string{"kubernetes.io/arch": "amd64"},
+		Tolerations:            []runner.KubernetesToleration{{Key: "ci", Operator: "Equal", Value: "true", Effect: "NoSchedule"}},
+		Resources:              runner.KubernetesResources{RequestsCPU: "500m", LimitsMemory: "2Gi"},
+		SecurityContext:        runner.KubernetesSecurityContext{RunAsUser: &runAsUser},
+		SchedulingTimeout:      7 * time.Minute,
+		ServiceReadyTimeout:    45 * time.Second,
+		TerminationGracePeriod: 20 * time.Second,
+	}, got)
 }

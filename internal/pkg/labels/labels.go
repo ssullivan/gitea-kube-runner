@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	SchemeHost   = "host"
-	SchemeDocker = "docker"
+	SchemeHost       = "host"
+	SchemeDocker     = "docker"
+	SchemeKubernetes = "kubernetes"
 )
 
 type Label struct {
@@ -39,7 +40,7 @@ func Parse(str string) (*Label, error) {
 	if len(splits) >= 3 {
 		label.Arg = splits[2]
 	}
-	if label.Schema != SchemeHost && label.Schema != SchemeDocker {
+	if label.Schema != SchemeHost && label.Schema != SchemeDocker && label.Schema != SchemeKubernetes {
 		// Not a schema we know: the colon belongs to the label name itself.
 		return &Label{
 			Name:   str,
@@ -61,17 +62,32 @@ func (l Labels) RequireDocker() bool {
 	return false
 }
 
+func (l Labels) RequireKubernetes() bool {
+	for _, label := range l {
+		if label.Schema == SchemeKubernetes {
+			return true
+		}
+	}
+	return false
+}
+
+// PickPlatform resolves a job's runs-on values against this runner's labels. The
+// result is always one of: "docker://<image>", "kubernetes://<image>", or the host-mode
+// marker "-self-hosted" — callers that need the bare image must strip the scheme prefix
+// themselves, since the prefix is what lets them tell backends apart.
 func (l Labels) PickPlatform(runsOn []string) string {
 	platforms := make(map[string]string, len(l))
 	for _, label := range l {
 		switch label.Schema {
 		case SchemeDocker:
 			// "//" will be ignored
-			platforms[label.Name] = strings.TrimPrefix(label.Arg, "//")
+			platforms[label.Name] = "docker://" + strings.TrimPrefix(label.Arg, "//")
+		case SchemeKubernetes:
+			platforms[label.Name] = "kubernetes://" + strings.TrimPrefix(label.Arg, "//")
 		case SchemeHost:
 			platforms[label.Name] = "-self-hosted"
 		default:
-			// unreachable: Parse only produces host or docker schemas
+			// unreachable: Parse only produces host, docker, or kubernetes schemas
 			continue
 		}
 	}

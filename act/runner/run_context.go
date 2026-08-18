@@ -252,7 +252,12 @@ func (rc *RunContext) toolCache(fallback string) string {
 // and friends report so the two cannot drift apart.
 func (rc *RunContext) runnerEnv(ctx context.Context) []string {
 	ext := container.LinuxContainerEnvironmentExtensions{}
-	runnerContext := ext.GetRunnerContext(ctx)
+	return rc.runnerEnvFrom(ext.GetRunnerContext(ctx))
+}
+
+// runnerEnvFrom formats a runner context as the RUNNER_* variables a job runs with, so a
+// backend that answers the context differently is not forced through the docker one.
+func (rc *RunContext) runnerEnvFrom(runnerContext map[string]any) []string {
 	runnerContext["tool_cache"] = rc.toolCache(container.DefaultToolCache)
 
 	env := make([]string, 0, len(runnerContext))
@@ -336,6 +341,9 @@ func (rc *RunContext) startHostEnvironment() common.Executor {
 	return func(ctx context.Context) error {
 		logger := common.Logger(ctx)
 		rawLogger := logger.WithField(rawOutputField, true)
+		// The container backends say which one ran the job in their "Starting job container"
+		// group; host mode has no such group, and said nothing at all.
+		rawLogger.Infof("Starting job on the runner host (backend: %s)", backendHost)
 		logWriter := common.NewLineWriter(rc.commandHandler(ctx), func(s string) bool {
 			if rc.Config.LogOutput {
 				rawLogger.Infof("%s", s)
@@ -408,12 +416,15 @@ func (rc *RunContext) startHostEnvironment() common.Executor {
 
 // printStartJobContainerGroup mirrors actions/runner's "Starting job container"
 // section: emit the group header and summary, return a closer for ::endgroup::.
-func printStartJobContainerGroup(ctx context.Context, image, name, network string) func() {
+func printStartJobContainerGroup(ctx context.Context, image, name, network string, backend execBackend) func() {
 	rawLogger := common.Logger(ctx).WithField(rawOutputField, true)
 	rawLogger.Infof("::group::Starting job container")
 	rawLogger.Infof("image: %s", image)
 	rawLogger.Infof("name: %s", name)
 	rawLogger.Infof("network: %s", network)
+	// Which backend ran a job is otherwise only inferable from the shape of the rest of
+	// the log, and the label that selected it is not in the log at all.
+	rawLogger.Infof("backend: %s", backend)
 	return func() {
 		rawLogger.Infof("::endgroup::")
 	}
@@ -567,7 +578,7 @@ func (rc *RunContext) startJobContainer() common.Executor {
 
 		rc.jobNetworkName = networkName
 
-		defer printStartJobContainerGroup(ctx, image, name, networkName)()
+		defer printStartJobContainerGroup(ctx, image, name, networkName, backendDocker)()
 		return common.NewPipelineExecutor(
 			rc.pullServicesImages(rc.Config.ForcePull),
 			rc.JobContainer.Pull(rc.Config.ForcePull),
@@ -927,9 +938,12 @@ func (rc *RunContext) interpolateOutputs() common.Executor {
 func (rc *RunContext) startContainer() common.Executor {
 	return func(ctx context.Context) error {
 		var err error
-		if rc.IsHostEnv(ctx) {
+		switch rc.execBackend(ctx) {
+		case backendHost:
 			err = rc.startHostEnvironment()(ctx)
-		} else {
+		case backendKubernetes:
+			err = rc.startPodEnvironment()(ctx)
+		default:
 			err = rc.startJobContainer()(ctx)
 		}
 		if err != nil {
@@ -939,6 +953,41 @@ func (rc *RunContext) startContainer() common.Executor {
 		}
 		return err
 	}
+}
+
+// execBackend is which execution environment a job runs in, resolved from the
+// scheme labels.PickPlatform put on the runs-on image.
+type execBackend int
+
+const (
+	backendDocker execBackend = iota
+	backendHost
+	backendKubernetes
+)
+
+func (b execBackend) String() string {
+	switch b {
+	case backendHost:
+		return "host"
+	case backendKubernetes:
+		return "kubernetes"
+	default:
+		return "docker"
+	}
+}
+
+func (rc *RunContext) execBackend(ctx context.Context) execBackend {
+	platform := rc.runsOnImage(ctx)
+	// A kubernetes label has no docker daemon to fall back to, so an explicit
+	// container: image only changes the Pod's image (see platformImage). A host
+	// label does, and setting one there has always meant "run this job in docker".
+	if strings.HasPrefix(platform, "kubernetes://") {
+		return backendKubernetes
+	}
+	if strings.EqualFold(platform, "-self-hosted") && rc.containerImage(ctx) == "" {
+		return backendHost
+	}
+	return backendDocker
 }
 
 func (rc *RunContext) cleanupFailedStart(ctx context.Context) {
@@ -957,10 +1006,9 @@ func (rc *RunContext) cleanupFailedStart(ctx context.Context) {
 	}
 }
 
+// IsHostEnv reports whether the job's runs-on label picked the host backend.
 func (rc *RunContext) IsHostEnv(ctx context.Context) bool {
-	platform := rc.runsOnImage(ctx)
-	image := rc.containerImage(ctx)
-	return image == "" && strings.EqualFold(platform, "-self-hosted")
+	return rc.execBackend(ctx) == backendHost
 }
 
 func (rc *RunContext) stopContainer() common.Executor {
@@ -1106,7 +1154,20 @@ func (rc *RunContext) platformImage(ctx context.Context) string {
 		return containerImage
 	}
 
-	return rc.runsOnImage(ctx)
+	return stripImageScheme(rc.runsOnImage(ctx))
+}
+
+// stripImageScheme drops the "docker://"/"kubernetes://" prefix labels.PickPlatform
+// adds so the backend can be told apart from the image; a bare image (e.g. from
+// Config.Platforms, which carries no scheme) passes through unchanged.
+func stripImageScheme(s string) string {
+	if v, ok := strings.CutPrefix(s, "docker://"); ok {
+		return v
+	}
+	if v, ok := strings.CutPrefix(s, "kubernetes://"); ok {
+		return v
+	}
+	return s
 }
 
 func (rc *RunContext) options(ctx context.Context) string {

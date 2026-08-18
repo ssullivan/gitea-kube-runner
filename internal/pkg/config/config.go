@@ -111,6 +111,57 @@ type Host struct {
 	WorkdirParent string `yaml:"workdir_parent"` // WorkdirParent specifies the parent directory for the host's working directory.
 }
 
+// Kubernetes represents the configuration for the Kubernetes Pod execution backend,
+// used by runner labels with the "kubernetes" schema. Job containers run with no
+// Docker daemon available: `uses: docker://image` steps and actions with
+// `runs.using: docker` are unsupported, and the workspace is an ephemeral emptyDir
+// with no cross-job persistence.
+type Kubernetes struct {
+	Namespace              string             `yaml:"namespace"`                // Namespace job Pods are created in. Empty resolves to the in-cluster namespace, or "default" outside a cluster.
+	Kubeconfig             string             `yaml:"kubeconfig"`               // Path to a kubeconfig file. Empty uses in-cluster config when running inside a Pod, otherwise the default kubeconfig loading rules.
+	KubeconfigContext      string             `yaml:"kubeconfig_context"`       // Context to use from Kubeconfig. Empty uses the kubeconfig's current-context.
+	ServiceAccountName     string             `yaml:"service_account_name"`     // ServiceAccount job Pods run as. Empty uses the namespace default.
+	ImagePullSecrets       []string           `yaml:"image_pull_secrets"`       // Names of existing docker-registry Secrets attached to job Pods for private image pulls.
+	ImagePullPolicy        string             `yaml:"image_pull_policy"`        // Always, IfNotPresent, or Never. Empty lets kubelet default.
+	PodLabels              map[string]string  `yaml:"pod_labels"`               // Extra labels applied to every job Pod, merged over the runner's own bookkeeping labels.
+	PodAnnotations         map[string]string  `yaml:"pod_annotations"`          // Extra annotations applied to every job Pod.
+	NodeSelector           map[string]string  `yaml:"node_selector"`            // nodeSelector applied to every job Pod.
+	Tolerations            []Toleration       `yaml:"tolerations"`              // Tolerations applied to every job Pod.
+	Resources              PodResources       `yaml:"resources"`                // Default resource requests/limits for the job container. No per-service override yet.
+	PodSecurityContext     PodSecurityContext `yaml:"pod_security_context"`     // Pod-level securityContext defaults.
+	SchedulingTimeout      time.Duration      `yaml:"scheduling_timeout"`       // How long to wait for a job Pod to reach Running before failing the job.
+	ServiceReadyTimeout    time.Duration      `yaml:"service_ready_timeout"`    // Mirrors container.service_ready_timeout, for service sidecar readiness. Negative disables waiting.
+	TerminationGracePeriod time.Duration      `yaml:"termination_grace_period"` // Grace period given to a job Pod on delete.
+	RequireKubernetes      bool               `yaml:"require_kubernetes"`       // Always require a reachable cluster, even if not required by runner's labels.
+	ConnectTimeout         time.Duration      `yaml:"connect_timeout"`          // Timeout to wait for the cluster to be reachable at startup, mirrors container.docker_timeout.
+}
+
+// Toleration mirrors the subset of corev1.Toleration fields useful for job Pods.
+type Toleration struct {
+	Key      string `yaml:"key"`
+	Operator string `yaml:"operator"`
+	Value    string `yaml:"value"`
+	Effect   string `yaml:"effect"`
+}
+
+// PodResources are the default CPU/memory requests and limits for the job container.
+// Values follow Kubernetes quantity syntax (e.g. "500m", "512Mi"); empty leaves that
+// field unset on the Pod spec.
+type PodResources struct {
+	RequestsCPU    string `yaml:"requests_cpu"`
+	RequestsMemory string `yaml:"requests_memory"`
+	LimitsCPU      string `yaml:"limits_cpu"`
+	LimitsMemory   string `yaml:"limits_memory"`
+}
+
+// PodSecurityContext are Pod-level securityContext defaults for job Pods. Pointers
+// distinguish unset from false/zero.
+type PodSecurityContext struct {
+	RunAsNonRoot *bool  `yaml:"run_as_non_root"`
+	RunAsUser    *int64 `yaml:"run_as_user"`
+	FSGroup      *int64 `yaml:"fs_group"`
+}
+
 // Metrics represents the configuration for the Prometheus metrics endpoint.
 type Metrics struct {
 	Enabled        bool          `yaml:"enabled"`         // Enabled indicates whether the metrics endpoint is exposed.
@@ -135,6 +186,7 @@ type Config struct {
 	Cache       Cache       `yaml:"cache"`        // Cache represents the configuration for caching.
 	Container   Container   `yaml:"container"`    // Container represents the configuration for the container.
 	Host        Host        `yaml:"host"`         // Host represents the configuration for the host.
+	Kubernetes  Kubernetes  `yaml:"kubernetes"`   // Kubernetes represents the configuration for the Kubernetes Pod execution backend.
 	Metrics     Metrics     `yaml:"metrics"`      // Metrics represents the configuration for the Prometheus metrics endpoint.
 	HealthCheck HealthCheck `yaml:"health_check"` // HealthCheck controls opt-in local task-admission checks.
 }
@@ -222,6 +274,13 @@ func LoadDefault(file string) (*Config, error) {
 		}
 		cfg.Host.WorkdirParent = filepath.Join(home, ".cache", "act")
 	}
+	if cfg.Kubernetes.SchedulingTimeout <= 0 {
+		cfg.Kubernetes.SchedulingTimeout = 5 * time.Minute
+	}
+	if cfg.Kubernetes.TerminationGracePeriod <= 0 {
+		cfg.Kubernetes.TerminationGracePeriod = 30 * time.Second
+	}
+	// connect_timeout defaults to 0 (wait indefinitely), same as container.docker_timeout.
 	if cfg.Runner.FetchTimeout <= 0 {
 		cfg.Runner.FetchTimeout = 5 * time.Second
 	}

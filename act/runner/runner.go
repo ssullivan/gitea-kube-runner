@@ -98,6 +98,52 @@ type Config struct {
 	RunnerName                        string                       // name this runner registered with, reported as `runner.name`, defaults to the hostname
 	JobStartedHook                    string                       // script run inside the job environment before the job's first step; ACTIONS_RUNNER_HOOK_JOB_STARTED is read from Env when empty
 	JobCompletedHook                  string                       // script run inside the job environment after the job's last step; ACTIONS_RUNNER_HOOK_JOB_COMPLETED is read from Env when empty
+	Kubernetes                        KubernetesConfig             // settings for the kubernetes execution backend, used by jobs whose runs-on label selects it
+}
+
+// KubernetesConfig configures the kubernetes execution backend. It carries plain
+// values rather than a live client so this package needs no kubernetes SDK of its own,
+// the way it needs no docker client either.
+type KubernetesConfig struct {
+	Namespace              string
+	Kubeconfig             string
+	KubeconfigContext      string
+	ServiceAccountName     string
+	ImagePullSecrets       []string
+	ImagePullPolicy        string
+	PodLabels              map[string]string
+	PodAnnotations         map[string]string
+	NodeSelector           map[string]string
+	Tolerations            []KubernetesToleration
+	Resources              KubernetesResources
+	SecurityContext        KubernetesSecurityContext
+	SchedulingTimeout      time.Duration
+	ServiceReadyTimeout    time.Duration // 0 falls back to the docker backend's service_ready_timeout; negative disables waiting
+	TerminationGracePeriod time.Duration
+}
+
+// KubernetesToleration is a scheduling toleration applied to every job Pod.
+type KubernetesToleration struct {
+	Key      string
+	Operator string
+	Value    string
+	Effect   string
+}
+
+// KubernetesResources are the job container's resource requests and limits, in
+// Kubernetes quantity syntax.
+type KubernetesResources struct {
+	RequestsCPU    string
+	RequestsMemory string
+	LimitsCPU      string
+	LimitsMemory   string
+}
+
+// KubernetesSecurityContext are the Pod-level securityContext defaults for job Pods.
+type KubernetesSecurityContext struct {
+	RunAsNonRoot *bool
+	RunAsUser    *int64
+	FSGroup      *int64
 }
 
 // RunnerDebug reports whether debug logging is on, exposed as `runner.debug` and
