@@ -445,7 +445,7 @@ kubectl get pods -n gitea-runner -l app.kubernetes.io/managed-by=gitea-runner
 
 #### Where the runner itself runs
 
-**In the cluster** — credentials are automatic. Add these to the runner's own container spec, so it knows which Pod it is and the cluster can clean up after a runner killed before it can delete its job Pods:
+**In the cluster** — credentials are automatic. [`examples/kubernetes-jobs/deployment.yaml`](examples/kubernetes-jobs/deployment.yaml) is a complete manifest for this: token, config, volume and Deployment, with no daemon and nothing privileged. Add these to the runner's own container spec, so it knows which Pod it is and the cluster can clean up after a runner killed before it can delete its job Pods:
 
 ```yaml
         env:
