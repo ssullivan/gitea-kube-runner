@@ -21,6 +21,8 @@
 
 Docker Engine Community version is required for docker mode. To install Docker CE, follow the official [install instructions](https://docs.docker.com/engine/install/).
 
+The Kubernetes backend needs none of that on the runner's host: it needs a reachable cluster and permission to manage Pods in one namespace instead. See [Kubernetes backend](#kubernetes-backend) below.
+
 ### Download pre-built binary
 
 Visit [here](https://dl.gitea.com/gitea-runner/) and download the right version for your platform.
@@ -243,6 +245,8 @@ Whenever the resulting labels differ from the ones in the registration file, the
 
 > **Note:** A runner that only exposes `host` labels still needs access to a Docker daemon (e.g. a mounted `/var/run/docker.sock`) whenever a job uses a `docker://` action or a service container. `host` labels only change where the job's own steps run; container-based steps and actions are still executed with Docker.
 >
+> A `kubernetes://` label needs no daemon at all: services become sidecars in the job's own Pod, and the cases that would need one — `uses: docker://` and actions with `runs.using: docker` — fail the job with a message saying so rather than falling back.
+>
 > A job that sets `container:` is the same story, and the two schemas differ here. On a `host` label, an explicit `container:` image runs the **whole job in Docker** rather than on the host. On a `kubernetes://` label it does not: there is no daemon to fall back to, so `container:` only changes the image the job's Pod is created from. Every job's log names the backend that ran it, on the `backend:` line of its "Starting job container" group.
 
 #### Service containers
@@ -262,6 +266,8 @@ services:
 A service that reports unhealthy fails the job right away, with its container log. One that never becomes healthy fails it after `container.service_ready_timeout` (default `5m`, negative disables the wait). A service that exits without declaring a healthcheck only gets its log and a warning.
 
 A job in a container reaches a service by its id on the job network, on the port the service listens on, for example `psql -h postgres -p 5432`. The started containers also fill the `job` context: `job.container.{id,network}` and `job.services.<id>.{id,network,ports}`, where `ports` maps a container port to the host port Docker published it on, for the services that publish one.
+
+On the Kubernetes backend a service is a sidecar in the job's own Pod, so **it is reached on `localhost`** at the port it listens on — `psql -h localhost -p 5432` — and not by its id. Only the `--health-*` options are read there, `kubernetes.service_ready_timeout` overrides the value above, and a service declaring no `--health-cmd` is not waited for at all, because Kubernetes calls a container ready the moment it starts. The `job` context is filled from the Pod: every `id` is the Pod's own uid, `network` is empty, and `ports` is always empty, since a sidecar publishes nothing.
 
 Unlike GitHub, a job whose steps run on the host (a `host` label without `container:`) starts no service containers, so `job.services` and `job.container` stay empty. Give such a job a `container:` when it needs services.
 
@@ -290,13 +296,15 @@ To change a value for one job, set it in a step's `env:` or in the job's `contai
 
 Images are pulled by the Docker daemon, which needs its own proxy setting. In the `dind` images the daemon runs in the same container and reads the variables above. For any other daemon, see [the Docker documentation](https://docs.docker.com/engine/daemon/proxy/). The runner logs a warning at startup if it has a proxy and the daemon does not.
 
-Dockerfile actions are built with these variables as build arguments, so their `RUN` steps can reach the network.
+Dockerfile actions are built with these variables as build arguments, so their `RUN` steps can reach the network. This does not apply to the Kubernetes backend, which cannot build them at all: an action with `runs.using: docker` fails the job.
 
 A password in a proxy URL is hidden in job logs. Any step can still read it, because the step is given the proxy URL in its environment.
 
 #### Caching (`actions/cache`)
 
 Each runner starts its own cache server automatically. Cache entries are local to that runner — runners do not share a cache by default.
+
+Jobs reach that server over the network, so on the Kubernetes backend the cluster needs a route back to wherever the runner runs — ordinarily it has one, whether the runner is a Pod or a machine outside. Where it does not, the cache steps fail while the rest of the job succeeds; see [Cache and artifacts](docs/kubernetes-backend.md#cache-and-artifacts).
 
 **Cache service v2**
 
@@ -359,6 +367,8 @@ While the runner is idle it cleans up after earlier jobs:
 - on runners that use docker, per-job networks left behind by jobs the runner did not live to tear down are removed, identified by the `com.gitea.runner.uuid` label carrying this runner's uuid
 - cleanup runs every `runner.idle_cleanup_interval` (default: `10m`; set `0` to disable), and setting either knob to `0` disables all of the above
 
+Job Pods are outside all of this, and no setting here affects them: the cluster bounds them instead, by the deadline every job Pod carries and, for a runner in the cluster, by ownership — see [If the runner dies mid-job](docs/kubernetes-backend.md#if-the-runner-dies-mid-job).
+
 #### Post-task script (`runner.post_task_script`)
 
 Optional host script that runs **after** each task's built-in cleanup (post-steps, container teardown, bind-workdir removal). Use it for extra machine housekeeping — Docker pruning, disk cleanup, and similar.
@@ -378,6 +388,87 @@ Because they run where the steps run and see the job's environment, they are the
 Both hooks are synchronous and block the job while they run. Either one exiting non-zero fails the job, and there is no per-hook timeout.
 
 See **[docs/job-hooks.md](docs/job-hooks.md)** for the execution order, environment, and platform notes.
+
+### Kubernetes backend
+
+A job whose `runs-on` matches a `kubernetes://` label runs as **its own Pod** on a cluster: one container for the job's steps, one sidecar per service container, and an `emptyDir` they share as the workspace. The Pod is deleted when the job ends. Nothing needs a Docker daemon — no socket to mount, no privileged Docker-in-Docker sidecar — and the choice is per job, so one runner can serve `docker`, `host` and `kubernetes` labels at once.
+
+You need a reachable cluster and permission to manage Pods in one namespace. The runner itself can run anywhere that can reach both Gitea and the cluster's API.
+
+**1. Give the runner a namespace to work in.**
+
+```bash
+kubectl apply -f examples/kubernetes-jobs/rbac.yaml
+```
+
+That creates the `gitea-runner` namespace, the ServiceAccount the runner uses, a second permissionless one for the job Pods themselves, and a Role granting only what the backend calls: create/get/delete on `pods`, create on `pods/exec`, get on `pods/log`. Bind the Role to whatever ServiceAccount your runner actually runs as.
+
+**2. Point the runner at the cluster.**
+
+```yaml
+kubernetes:
+  namespace: gitea-runner
+  # The ServiceAccount job Pods run as; it needs no permissions of its own.
+  service_account_name: gitea-runner-jobs
+  resources:
+    requests_cpu: 500m
+    requests_memory: 512Mi
+    limits_cpu: "2"
+    limits_memory: 4Gi
+```
+
+A runner inside the cluster picks up its in-cluster credentials automatically. One outside needs `kubernetes.kubeconfig` (and optionally `kubernetes.kubeconfig_context`) as well. `config generate` lists the rest — node selectors, tolerations, image pull secrets, security context, timeouts.
+
+**3. Add a label for each image jobs may select.**
+
+```yaml
+runner:
+  labels:
+    - "ubuntu-latest:kubernetes://docker.gitea.com/runner-images:ubuntu-latest"
+```
+
+**4. Run a workflow.**
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "this runs in its own Pod"
+```
+
+Two things confirm it ran where you think: the job log's "Starting job container" group ends with a `backend: kubernetes` line, and while the job runs the Pod is visible with
+
+```bash
+kubectl get pods -n gitea-runner -l app.kubernetes.io/managed-by=gitea-runner
+```
+
+#### Where the runner itself runs
+
+**In the cluster** — credentials are automatic. Add these to the runner's own container spec, so it knows which Pod it is and the cluster can clean up after a runner killed before it can delete its job Pods:
+
+```yaml
+        env:
+          - name: GITEA_RUNNER_POD_NAME
+            valueFrom: {fieldRef: {fieldPath: metadata.name}}
+          - name: GITEA_RUNNER_POD_UID
+            valueFrom: {fieldRef: {fieldPath: metadata.uid}}
+```
+
+Job Pods are then owned by the runner's Pod and collected with it. Without this nothing is lost — job Pods still stop at their own deadline — they just have to be cleaned up afterwards. It applies only while job Pods share the runner's namespace, which is the default.
+
+**Outside the cluster** — set `kubernetes.kubeconfig`. Job Pods have no owner to be collected with, so they are bounded only by their own deadline. Either way the cluster needs a route back to the runner's host for `actions/cache` to work.
+
+#### What differs from the Docker backend
+
+- Services are sidecars in the job's Pod, reached on `localhost` rather than by id.
+- The workspace is an `emptyDir` that dies with the Pod, so **nothing is cached between jobs**, including the tool cache the Docker backend keeps in a named volume.
+- There is no Docker daemon: `uses: docker://<image>` steps and actions with `runs.using: docker` fail the job with a message naming the reason.
+- `credentials:` on a job container or service is refused — the kubelet pulls the image, so use `kubernetes.image_pull_secrets` instead.
+- Steps run as the image's own user; the exec API has no equivalent of docker's `--user`, so `kubernetes.pod_security_context` decides.
+- The job image must provide `sh` and `tar`, the same implicit requirement `docker cp` places on images today.
+
+See **[docs/kubernetes-backend.md](docs/kubernetes-backend.md)** for the full configuration reference, cluster permissions, what happens when the runner dies mid-job, and troubleshooting.
 
 ### Example Deployments
 
