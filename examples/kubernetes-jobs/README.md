@@ -9,9 +9,14 @@ Files in this directory:
 - [`rbac.yaml`](rbac.yaml)
   The ServiceAccounts, Role, and RoleBinding the runner needs to create, exec into, read logs from, and delete job Pods in its namespace. Apply it before starting the runner.
 
+- [`deployment.yaml`](deployment.yaml)
+  The runner itself, running in the cluster: registration token, a small volume for its `.runner` file, its configuration, and the Deployment. No Docker daemon, no privileged sidecar and no mounted socket — a job's isolation comes from being its own Pod. Fill in the image and the token, then apply it after `rbac.yaml`.
+
+  The image has to be built from this fork; upstream's published images do not carry this backend. `make docker` builds the `basic` flavour, which is all this needs, since the bundled-daemon flavours exist to give jobs a daemon this backend never uses.
+
 ### Runner configuration
 
-Give the runner a `kubernetes` label for each image jobs should be able to select, and point the `kubernetes:` section at the namespace prepared above:
+`deployment.yaml` carries this already, in its ConfigMap. It is repeated here because a runner outside the cluster needs the same settings in its own config file: a `kubernetes` label for each image jobs may select, and the `kubernetes:` section pointed at the namespace prepared above.
 
 ```yaml
 runner:
@@ -29,11 +34,11 @@ kubernetes:
     limits_memory: 4Gi
 ```
 
-A runner running outside the cluster needs `kubernetes.kubeconfig` set as well; one running inside it picks up its in-cluster credentials automatically.
+A runner running outside the cluster needs `kubernetes.kubeconfig` set as well; one running inside it picks up its in-cluster credentials automatically, and can leave `namespace` unset to use its own — which is what `deployment.yaml` does.
 
 ### Letting the cluster clean up after a runner that dies
 
-A runner deployed *in* the cluster should tell job Pods which Pod it is, by projecting its own name and UID with the downward API:
+A runner deployed *in* the cluster should tell job Pods which Pod it is, by projecting its own name and UID with the downward API. `deployment.yaml` sets both; for any other manifest, add:
 
 ```yaml
         env:
