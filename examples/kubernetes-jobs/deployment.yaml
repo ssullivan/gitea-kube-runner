@@ -1,0 +1,129 @@
+# Deploys the runner itself into the cluster, with the Kubernetes execution backend:
+# every job it accepts becomes its own Pod, so there is no Docker daemon here, no
+# privileged sidecar and no socket to mount.
+#
+# Apply rbac.yaml first — it creates the gitea-runner namespace, the ServiceAccount used
+# below, and the permissionless one the job Pods run as.
+#
+# The image must be built from this fork: upstream's published images do not carry this
+# backend. `make docker` builds the `basic` flavour (no bundled daemon, which is all this
+# needs); push it somewhere the cluster can pull from and set it below.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitea-runner-token
+  namespace: gitea-runner
+type: Opaque
+data:
+  # The registration token can be obtained from the web UI, API or command-line.
+  # You can also set a pre-defined global runner registration token for the Gitea instance
+  # via `GITEA_RUNNER_REGISTRATION_TOKEN`/`GITEA_RUNNER_REGISTRATION_TOKEN_FILE`.
+  token: << base64 encoded registration token >>
+---
+# Holds the runner's working directory (/data), which here is only the .runner
+# registration file: job workspaces live in the job Pods, not on the runner. Without it
+# the runner registers again on every restart, leaving stale runners in Gitea.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitea-runner-data
+  namespace: gitea-runner
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitea-runner-config
+  namespace: gitea-runner
+data:
+  config.yaml: |
+    log:
+      level: info
+    runner:
+      file: /data/.runner
+      capacity: 2
+      # One label per image jobs may select. The `kubernetes` schema is what sends a job
+      # to this backend; a runner can carry docker and host labels alongside these.
+      labels:
+      - "ubuntu-latest:kubernetes://docker.gitea.com/runner-images:ubuntu-latest"
+    kubernetes:
+      # namespace is left unset, so job Pods are created in the runner's own — which is
+      # also the only namespace rbac.yaml grants access to, and the condition for job Pods
+      # being owned by (and cleaned up with) this Pod.
+      service_account_name: gitea-runner-jobs
+      scheduling_timeout: 5m
+      # Applied to the job container of every job Pod.
+      resources:
+        requests_cpu: 500m
+        requests_memory: 512Mi
+        limits_cpu: "2"
+        limits_memory: 4Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea-runner
+  namespace: gitea-runner
+  labels:
+    app: gitea-runner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitea-runner
+  # The /data volume is ReadWriteOnce, which a rolling update would deadlock on: the new
+  # Pod cannot mount it until the old one lets go.
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: gitea-runner
+    spec:
+      # Granted by rbac.yaml. This is what lets the runner create job Pods.
+      serviceAccountName: gitea-runner
+      containers:
+      - name: runner
+        image: << your gitea-runner image, built from this fork >>
+        env:
+        - name: GITEA_INSTANCE_URL
+          value: http://gitea-http.gitea.svc.cluster.local:3000
+        - name: GITEA_RUNNER_REGISTRATION_TOKEN_FILE
+          value: /secrets/token
+        - name: CONFIG_FILE
+          value: /config/config.yaml
+        # Job Pods become dependents of this one, so those belonging to a runner that was
+        # killed rather than stopped are collected by the cluster instead of left behind.
+        # Without these, job Pods are simply unowned and bounded only by their deadline.
+        - name: GITEA_RUNNER_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: GITEA_RUNNER_POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        volumeMounts:
+        - name: config
+          mountPath: /config
+        - name: token
+          mountPath: /secrets
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: config
+        configMap:
+          name: gitea-runner-config
+      - name: token
+        secret:
+          secretName: gitea-runner-token
+      - name: data
+        persistentVolumeClaim:
+          claimName: gitea-runner-data
